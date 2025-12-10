@@ -1,0 +1,4 @@
+# for pre-training:
+# ms-swift==3.12.0
+# for arch testing: latest transformers<5.x.x
+transformers==4.57.3
