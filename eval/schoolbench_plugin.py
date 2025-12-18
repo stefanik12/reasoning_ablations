@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ from swift.plugin.callback import extra_callbacks
 from eval.developmental_skills import BenchmarkBuilder, BenchmarkSpec
 from eval.counterfactual_transform import CounterfactualTransformer, Shortcut
 
+logger = logging.getLogger()
 
 # -------------------------
 # Metrics helpers
@@ -27,6 +29,7 @@ def _maybe_wandb_log(args, state, scalars: Dict[str, float]) -> None:
     try:
         import wandb
     except Exception:
+        logger.warning("Not logging to wandb because not installed")
         return
 
     # Only if Trainer is configured to use wandb
@@ -34,10 +37,12 @@ def _maybe_wandb_log(args, state, scalars: Dict[str, float]) -> None:
     if isinstance(report_to, str):
         report_to = [report_to]
     if "wandb" not in report_to:
+        logger.warning("Not logging to wandb because reporting to wandb is not among --report_to")
         return
 
     # Only if a run is active (Trainer usually initializes it)
     if wandb.run is None:
+        logger.warning("Not logging to wandb because wandb is not initialized")
         return
 
     # Log at the Trainer step
@@ -224,6 +229,7 @@ class SchoolBenchEvalCallback(TrainerCallback):
         self._cached_base: Optional[List[Dict[str, Any]]] = None
         self._cached_cf: Optional[List[Dict[str, Any]]] = None
         self._cache_key: Optional[str] = None
+        logger.warning("SchoolBenchEvalCallback initialized")
 
     """
     Runs on each HF Trainer evaluation event and computes:
@@ -251,6 +257,7 @@ class SchoolBenchEvalCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ):
+        logger.warning("SchoolBenchEvalCallback on_evaluate called")
         if not getattr(state, "is_world_process_zero", True):
             return
 
