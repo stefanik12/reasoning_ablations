@@ -1,5 +1,5 @@
 # for pre-training: should pre pre-installed in docker://stefanik12/pytorch-2.9.1-cuda13.0-cudnn9-devel-extended
-# ms-swift==3.11.0
+ms-swift==3.11.0
 # deepspeed==0.18.3
 # for arch testing: our fork of transformers<4.57.3
 git+https://github.com/stefanik12/transformers-gated-qwen.git@gated-qwen
