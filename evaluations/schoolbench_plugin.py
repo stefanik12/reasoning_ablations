@@ -46,6 +46,7 @@ def _maybe_wandb_log(args, state, scalars: Dict[str, float]) -> None:
         return
 
     # Log at the Trainer step
+    logger.warning("Calling wandb.log with %s", scalars)
     wandb.log(scalars, step=int(getattr(state, "global_step", 0)))
 
 
