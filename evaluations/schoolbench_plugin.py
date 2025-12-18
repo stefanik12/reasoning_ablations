@@ -261,7 +261,11 @@ class SchoolBenchEvalCallback(TrainerCallback):
         if not getattr(state, "is_world_process_zero", True):
             return
 
-        model_kwargs = getattr(args, "model_kwargs", None) or {}
+        given_model_kwargs_arg = getattr(args, "model_kwargs", None)
+        if given_model_kwargs_arg is not None:
+            model_kwargs = json.loads(Path(given_model_kwargs_arg).read_text(encoding="utf-8"))
+        else:
+            model_kwargs = {}
         if not bool(model_kwargs.get("schoolbench_enabled", True)):
             return
 

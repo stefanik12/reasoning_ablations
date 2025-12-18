@@ -1,0 +1,11 @@
+{
+  "schoolbench_enabled": true,
+  "schoolbench_seed": 42,
+  "schoolbench_cf_seed": 123,
+  "schoolbench_topk": [1, 5, 10],
+  "schoolbench_n_per_skill": {
+    "relational_reasoning": 50,
+    "rule_induction": 50
+  },
+  "schoolbench_write_samples": false
+}
