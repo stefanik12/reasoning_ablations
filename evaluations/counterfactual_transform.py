@@ -621,7 +621,7 @@ class CounterfactualTransformer:
 
 
 if __name__ == "__main__":
-    from eval.developmental_skills import BenchmarkBuilder, BenchmarkSpec
+    from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
     rng = random.Random(0)
 
     # 1) Build a small dataset (one sample per skill) using your existing BenchmarkBuilder

@@ -9,7 +9,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, TrainerControl
 
 # Import the callback class from your plugin file
-from eval.schoolbench_plugin import SchoolBenchEvalCallback
+from evaluations.schoolbench_plugin import SchoolBenchEvalCallback
 
 
 @dataclass

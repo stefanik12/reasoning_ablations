@@ -15,8 +15,8 @@ from transformers import TrainerCallback, TrainerControl, TrainerState, Training
 # SWIFT pluginization: register extra callbacks and load via --external_plugins
 from swift.plugin.callback import extra_callbacks
 
-from eval.developmental_skills import BenchmarkBuilder, BenchmarkSpec
-from eval.counterfactual_transform import CounterfactualTransformer, Shortcut
+from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
+from evaluations.counterfactual_transform import CounterfactualTransformer, Shortcut
 
 logger = logging.getLogger()
 
