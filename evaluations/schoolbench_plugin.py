@@ -267,16 +267,13 @@ class SchoolBenchEvalCallback(TrainerCallback):
             model_kwargs = json.loads(Path(given_model_kwargs_arg).read_text(encoding="utf-8"))
         else:
             model_kwargs = {}
-        if not bool(model_kwargs.get("schoolbench_enabled", True)):
-            return
 
         model = kwargs.get("model", None)
         tokenizer = kwargs.get("tokenizer", None)
         if model is None or tokenizer is None:
             # If this happens in your setup, we can instead re-load tokenizer/model here,
             # but most Trainer runs pass them.
-            print("[schoolbench] skipped: model/tokenizer not provided to callback")
-            return
+            raise ValueError("[schoolbench] skipped: model/tokenizer not provided to callback")
 
         topk_list = model_kwargs.get("schoolbench_topk", [1, 5, 10])
         if isinstance(topk_list, str):
@@ -377,6 +374,7 @@ class SchoolBenchEvalCallback(TrainerCallback):
                 skill = key.split("cf::skill::", 1)[1]
                 scalars[f"schoolbench/skill_cf_top1/{skill}"] = float(vals["top1_acc"])
 
+        logger.warning("_maybe_wandb_log called")
         _maybe_wandb_log(args, state, scalars)
 
         # Write report

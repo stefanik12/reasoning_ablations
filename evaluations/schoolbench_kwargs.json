@@ -1,5 +1,4 @@
 {
-  "schoolbench_enabled": true,
   "schoolbench_seed": 42,
   "schoolbench_cf_seed": 123,
   "schoolbench_topk": [1, 5, 10],
