@@ -230,6 +230,8 @@ class SchoolBenchEvalCallback(TrainerCallback):
         self._cached_base: Optional[List[Dict[str, Any]]] = None
         self._cached_cf: Optional[List[Dict[str, Any]]] = None
         self._cache_key: Optional[str] = None
+        self._model = None
+        self._tok = None
         logger.warning("SchoolBenchEvalCallback initialized")
 
     """
@@ -251,6 +253,14 @@ class SchoolBenchEvalCallback(TrainerCallback):
       }
     """
 
+    def on_train_begin(self, args, state, control, **kwargs):
+        # Cache once. This is the best event to do it.
+        self._model = kwargs.get("model", self._model)
+        # Transformers >=4.5x often uses processing_class instead of tokenizer
+        self._tok = kwargs.get("processing_class", kwargs.get("tokenizer", self._tok))
+        if self._model is None or self._tok is None:
+            logger.warning("on_train_begin all kwargs: %s", kwargs)
+
     def on_evaluate(
         self,
         args: TrainingArguments,
@@ -268,8 +278,17 @@ class SchoolBenchEvalCallback(TrainerCallback):
         else:
             model_kwargs = {}
 
-        model = kwargs.get("model", None)
-        tokenizer = kwargs.get("tokenizer", None)
+        model = self._model
+        tokenizer = self._tok
+
+        tr = kwargs.get("trainer", None)
+        if tr is not None:
+            logger.warning("Tokenizer is not none!")
+            if self._model is None and getattr(tr, "model", None) is not None:
+                model = tr.model
+            if self._tokenizer is None and getattr(tr, "tokenizer", None) is not None:
+                tokenizer = tr.tokenizer
+
         if model is None or tokenizer is None:
             # If this happens in your setup, we can instead re-load tokenizer/model here,
             # but most Trainer runs pass them.
