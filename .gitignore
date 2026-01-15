@@ -71,4 +71,9 @@ Temporary Items
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,linux
 
 # Data files
-.json
+*.json
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class

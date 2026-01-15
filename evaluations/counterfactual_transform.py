@@ -5,10 +5,9 @@ import random
 import re
 import hashlib
 import json
-import os
 from tqdm import tqdm
-import argparse
 from pathlib import Path
+from collections import Counter
 
 
 # -------------------------
@@ -22,6 +21,7 @@ class Shortcut:
     LAST_TOKEN_HEURISTIC = "last_token_heuristic"
     LENGTH_HEURISTIC = "length_heuristic"
     FORMAT_KEYWORD_TRIGGER = "format_keyword_trigger"
+    COPY_BIAS = "copy_bias"
 
 
 SKILL_TO_SHORTCUTS: Dict[str, List[str]] = {
@@ -41,7 +41,7 @@ SKILL_TO_SHORTCUTS: Dict[str, List[str]] = {
         Shortcut.LENGTH_HEURISTIC
     ],
     "cognitive_control_inhibition": [
-        Shortcut.RECENCY_BIAS, Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER
+        Shortcut.RECENCY_BIAS, Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER, Shortcut.COPY_BIAS
     ],
     "symbol_recognition": [
         Shortcut.LABEL_RENAMING_INVARIANCE, Shortcut.FORMAT_KEYWORD_TRIGGER
@@ -155,7 +155,7 @@ class CounterfactualTransformer:
             # relational_reasoning
             ("relational_reasoning", Shortcut.RECENCY_BIAS): self._rr_reorder_facts,
             ("relational_reasoning", Shortcut.LAST_TOKEN_HEURISTIC): self._rr_add_trailing_distractor_symbol,
-            ("relational_reasoning", Shortcut.FORMAT_KEYWORD_TRIGGER): self._rr_rename_minmax_token,
+            ("relational_reasoning", Shortcut.FORMAT_KEYWORD_TRIGGER): self._rr_rename_query_token,
 
             # rule_induction
             ("rule_induction", Shortcut.RECENCY_BIAS): self._ri_shuffle_examples,
@@ -177,6 +177,7 @@ class CounterfactualTransformer:
             ("cognitive_control_inhibition", Shortcut.RECENCY_BIAS): self._inh_shuffle_mapping_order,
             ("cognitive_control_inhibition", Shortcut.LAST_TOKEN_HEURISTIC): self._inh_append_query_distractor,
             ("cognitive_control_inhibition", Shortcut.FORMAT_KEYWORD_TRIGGER): self._inh_rename_map_token,
+            ("cognitive_control_inhibition", Shortcut.COPY_BIAS): self._inh_add_conflicting_hint,
 
             # symbol recognition
             ("symbol_recognition", Shortcut.LABEL_RENAMING_INVARIANCE): self._symrec_swap_yes_no,
@@ -236,9 +237,10 @@ class CounterfactualTransformer:
         it["meta"]["cf_edit"] = "added_trailing_distractor_token"
         return it
 
-    def _rr_rename_minmax_token(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
+    def _rr_rename_query_token(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
         # Disputes keyword-trigger reliance: rename 'min'/'max' token while preserving meaning.
         # We keep same structure but change the keyword.
+        # For compare queries, rename YES/NO to TRUE/FALSE.
         prompt = it["prompt"]
         if "min(" in prompt:
             it["prompt"] = prompt.replace("min(", "smallest(")
@@ -246,6 +248,15 @@ class CounterfactualTransformer:
         elif "max(" in prompt:
             it["prompt"] = prompt.replace("max(", "largest(")
             it["meta"]["cf_edit"] = "renamed_max_to_largest"
+        elif "=YES/NO?" in prompt:
+            # Compare query: rename YES/NO tokens to TRUE/FALSE
+            it["prompt"] = prompt.replace("=YES/NO?", "=TRUE/FALSE?")
+            gold = _gold(it)
+            if gold == "YES":
+                _set_gold(it, "TRUE")
+            elif gold == "NO":
+                _set_gold(it, "FALSE")
+            it["meta"]["cf_edit"] = "renamed_yesno_to_truefalse"
         else:
             # If not present, leave unchanged (shouldn't happen if format is consistent).
             it["meta"]["cf_edit"] = "noop_no_minmax"
@@ -430,6 +441,19 @@ class CounterfactualTransformer:
     def _inh_rename_map_token(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
         it["prompt"] = it["prompt"].replace("MAP:", "RULEMAP:")
         it["meta"]["cf_edit"] = "renamed_MAP_marker"
+        return it
+
+    def _inh_add_conflicting_hint(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
+        # Adds a HINT line showing the query symbol (wrong answer) to test copy-bias inhibition.
+        # The model must suppress this explicit distractor cue and apply the mapping.
+        prompt = it["prompt"]
+        m = re.search(r"^Q:\s*(\S+)", prompt, flags=re.M)
+        if not m:
+            return it
+        query_sym = m.group(1)
+        # Insert HINT: <query_sym> before the Q: line
+        it["prompt"] = prompt.replace(f"Q: {query_sym}", f"HINT: {query_sym}\nQ: {query_sym}")
+        it["meta"]["cf_edit"] = "added_conflicting_hint"
         return it
 
     # --- Symbol recognition ---
@@ -632,7 +656,7 @@ def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/
 
     # 1) Build a small dataset (one sample per skill) using your existing BenchmarkBuilder
     spec = BenchmarkSpec(
-        seed=42,
+        seed=42,        # Put as arg
         n_per_skill={
             "relational_reasoning": n_samples_per_skill,
             "rule_induction": n_samples_per_skill,
@@ -695,8 +719,14 @@ def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/
     with open(path, "w") as f:
         json.dump(output, f, indent=2)
 
+    # Print counts per skill
+    skill_counts = Counter(item["skill"] for item in output)
+    print("\n=== Samples per skill ===")
+    for skill, count in sorted(skill_counts.items()):
+        print(f"  {skill}: {count}")
+
     print(f"Saved {len(output)} entries")
-    
+
 
 if __name__ == "__main__":
     from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec

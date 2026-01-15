@@ -101,6 +101,7 @@ class RelationalReasoningSkill:
 
     Refinement (vs earlier versions):
     - We keep the chain short to reduce working-memory confounds and focus on relational inference.
+    - We ask for comparison of specific relation with YES/NO output rather than just min/max.
     """
 
     name = "relational_reasoning"
@@ -108,11 +109,11 @@ class RelationalReasoningSkill:
     def __init__(
         self,
         symbols: Optional[List[str]] = None,
-        relation: str = ">",
-        query: str = "min",      # "min" or "max"
-        chain_len: int = 2,      # short chain = closer to “basic concept” comparisons, less WM-heavy
+        relation: str = "random",    # ">", "<", or "random"
+        query: str = "random",       # "min", "max", "compare", or "random"
+        chain_len: str = "random",   # 2, 3, or "random"
     ):
-        self.symbols = symbols or ["A", "B", "C"]
+        self.symbols = symbols or ["A", "B", "C", "D", "E"]  # 5 symbols
         self.relation = relation
         self.query = query
         self.chain_len = chain_len
@@ -122,24 +123,61 @@ class RelationalReasoningSkill:
         for _ in range(n):
             # Choose a total order so that "comparison" is well-defined and unambiguous.
             order = _shuffle(rng, self.symbols)
-            k = min(self.chain_len, len(order) - 1)
+            
+            # Randomize chain_len if set to "random"
+            chain_len = rng.choice([2, 3]) if self.chain_len == "random" else self.chain_len
+            k = min(chain_len, len(order) - 1)
 
-            # Facts mirror “comparison relationships” (e.g., bigger-than) in a stripped symbolic form.
+            # Randomize relation if set to "random"
+            relation = rng.choice([">", "<"]) if self.relation == "random" else self.relation
+
+            # Facts mirror "comparison relationships" (e.g., bigger-than) in a stripped symbolic form.
             involved = order[: k + 1]
-            facts = [f"{involved[i]} {self.relation} {involved[i+1]}" for i in range(k)]
+            facts = [f"{involved[i]} {relation} {involved[i+1]}" for i in range(k)]
 
-            # Query asks to apply the inferred ordering (min/max), analogous to choosing the “smaller/larger”.
-            if self.query == "min":
-                gold = involved[-1]
+            # Determine ordering semantics based on relation
+            # For ">": involved[0] is largest, involved[-1] is smallest
+            # For "<": involved[0] is smallest, involved[-1] is largest
+            relation_means_greater = (relation == ">")
+
+            # Randomize query if set to "random", otherwise use fixed query
+            query = rng.choice(["min", "max", "compare"]) if self.query == "random" else self.query
+
+            # Query asks to apply the inferred ordering (min/max), or transitive comparison
+            if query == "min":
+                # min = smallest element in the ordering
+                gold = involved[-1] if relation_means_greater else involved[0]
                 q = f"Q: min({','.join(involved)})="
-            elif self.query == "max":
-                gold = involved[0]
+            elif query == "max":
+                # max = largest element in the ordering
+                gold = involved[0] if relation_means_greater else involved[-1]
                 q = f"Q: max({','.join(involved)})="
+            elif query == "compare":
+                # Transitive comparison: ask if X rel Y for non-adjacent elements
+                if len(involved) >= 3:
+                    # Pick first and last (guaranteed to require transitive inference)
+                    first, last = involved[0], involved[-1]
+                else:
+                    # With only 2 elements, just use them (direct from facts)
+                    first, last = involved[0], involved[1]
+                
+                # Randomly decide whether to ask true or false question
+                # By construction: first rel first+1 rel ... rel last
+                # So "first rel last" is TRUE (transitive closure)
+                # And "last rel first" is FALSE
+                if rng.random() < 0.5:
+                    # True case: first rel last (follows from chain by construction)
+                    q = f"Q: {first}{relation}{last}=YES/NO?"
+                    gold = "YES"
+                else:
+                    # False case: last rel first (inverse of the chain)
+                    q = f"Q: {last}{relation}{first}=YES/NO?"
+                    gold = "NO"
             else:
-                raise ValueError("query must be 'min' or 'max'")
+                raise ValueError("query must be 'min', 'max', 'compare', or 'random'")
 
             prompt = "\n".join(facts + [q, "A:"])
-            meta = {"order": order, "facts": facts, "involved": involved, "query": self.query}
+            meta = {"order": order, "facts": facts, "involved": involved, "query": query}
             out.append(_fmt_item(self.name, prompt, gold, meta))
         return out
 
@@ -307,7 +345,7 @@ class QuantitativeReasoningSkill:
       number/counting is a canonical such concept.
 
     Implementation alignment:
-    - Compare two small sets represented as repeated neutral tokens (●●● vs ●●).
+    - Compare two small sets represented as repeated neutral tokens (*** vs **).
     - This keeps the cognitive demand “which set is larger?” aligned with basic numeracy concepts,
       without adding language or world knowledge.
 
@@ -319,22 +357,25 @@ class QuantitativeReasoningSkill:
 
     def __init__(
         self,
-        dot: str = "●",
+        dot: str = "*",
         min_n: int = 1,
         max_n: int = 5,
-        labels: Optional[List[str]] = None,
+        label_pool: Optional[List[str]] = None,
         allow_equal: bool = False,
     ):
         self.dot = dot
         self.min_n = min_n
         self.max_n = max_n
-        self.labels = labels or ["X", "Y"]
+        self.label_pool = label_pool or ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
         self.allow_equal = allow_equal
 
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
-        X, Y = self.labels
         for _ in range(n):
+            # Randomly select two distinct labels
+            labels = _shuffle(rng, self.label_pool)[:2]
+            X, Y = labels[0], labels[1]
+            
             a = rng.randint(self.min_n, self.max_n)
             b = rng.randint(self.min_n, self.max_n)
             if not self.allow_equal:
@@ -379,15 +420,15 @@ class CognitiveControlInhibitionSkill:
     def __init__(
         self,
         symbols: Optional[List[str]] = None,
-        force_derangement: bool = True,
+        force_derangement: str = "random",  # True, False, or "random"
     ):
-        self.symbols = symbols or ["A", "B", "C"]
+        self.symbols = symbols or ["A", "B", "C", "D", "E"]
         self.force_derangement = force_derangement
 
-    def _mapping(self, rng: random.Random) -> Dict[str, str]:
+    def _mapping(self, rng: random.Random, force_derangement: bool) -> Dict[str, str]:
         syms = self.symbols
         perm = _shuffle(rng, syms)
-        if self.force_derangement and len(syms) > 1:
+        if force_derangement and len(syms) > 1:
             # Ensure “copy input” never matches the correct output.
             for _ in range(50):
                 if any(a == b for a, b in zip(syms, perm)):
@@ -399,7 +440,13 @@ class CognitiveControlInhibitionSkill:
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for _ in range(n):
-            m = self._mapping(rng)
+            # Randomize force_derangement if set to "random"
+            if self.force_derangement == "random":
+                force_derangement = rng.choice([True, False])
+            else:
+                force_derangement = self.force_derangement
+            
+            m = self._mapping(rng, force_derangement)
             x = _choice(rng, self.symbols)
             gold = m[x]
             # “Given instruction/rule → execute task” matches TADI’s “tarea directa” framing.
@@ -452,7 +499,7 @@ class SymbolRecognitionSkill:
             q = _choice(rng, pool)
             # “recognize” = decide membership; this is the formal proxy for letter-ID.
             gold = "YES" if q in alph else "NO"
-            prompt = f"ALPH: {{{','.join(alph)}}}\nQ: member({q})=YES/NO\nA:"
+            prompt = f"ALPH: {{{','.join(alph)}}}\nQ: member({q})=YES/NO?\nA:"
             meta = {"alph": alph, "q": q, "note": "proxy for visual letter recognition"}
             out.append(_fmt_item(self.name, prompt, gold, meta))
         return out
@@ -600,21 +647,25 @@ class InstructionComprehensionSkill:
 
     def __init__(
         self,
-        set1: Optional[List[str]] = None,
-        set2: Optional[List[str]] = None,
+        symbols: Optional[List[str]] = None,
+        set_size: int = 5,
     ):
-        self.set1 = set1 or ["A", "C", "E"]
-        self.set2 = set2 or ["B", "D", "F"]
+        self.symbols = symbols or ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
+        self.set_size = set_size
 
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
-        pool = self.set1 + self.set2
         for _ in range(n):
-            x = _choice(rng, pool)
+            # Randomly select which symbols form set1
+            shuffled = _shuffle(rng, self.symbols)
+            set1 = sorted(shuffled[:self.set_size])
+            set2 = sorted(shuffled[self.set_size:])
+            
+            x = _choice(rng, self.symbols)
             # "Follow instruction → execute" matches TADI direct-task framing, but simplified.
-            gold = "YES" if x in self.set1 else "NO"
-            prompt = f"RULE: YES if x in {{{','.join(self.set1)}}}, else NO.\nQ: x={x}\nA:"
-            meta = {"set1": self.set1, "set2": self.set2, "x": x}
+            gold = "YES" if x in set1 else "NO"
+            prompt = f"RULE: YES if x in {{{','.join(set1)}}}, else NO.\nQ: x={x}\nA:"
+            meta = {"set1": set1, "set2": set2, "x": x}
             out.append(_fmt_item(self.name, prompt, gold, meta))
         return out
 
