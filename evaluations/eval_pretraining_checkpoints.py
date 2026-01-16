@@ -176,14 +176,15 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
                 }
 
                 # 3. Generate
-                with torch.no_grad():
-                    out = model.generate(
-                            **model_inputs,
-                            max_new_tokens=SCHOOLBENCH_CONFIG["max_new_tokens"],
-                            do_sample=False,
-                            pad_token_id=tokenizer.pad_token_id,
-                            use_cache=False
-                    )
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    with torch.no_grad():
+                        out = model.generate(
+                                **model_inputs,
+                                max_new_tokens=SCHOOLBENCH_CONFIG["max_new_tokens"],
+                                do_sample=False,
+                                pad_token_id=tokenizer.pad_token_id,
+                                use_cache=False
+                        )
 
                 # 4. Decode
                 input_len = model_inputs["input_ids"].shape[1]
