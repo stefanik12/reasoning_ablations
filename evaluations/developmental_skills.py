@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Any, Optional, Protocol, Tuple
 import random
 import hashlib
+from collections import defaultdict
 
 
 
@@ -420,9 +421,9 @@ class CognitiveControlInhibitionSkill:
     def __init__(
         self,
         symbols: Optional[List[str]] = None,
-        force_derangement: str = "random",  # True, False, or "random"
+        force_derangement = True,  # True, False, or "random"
     ):
-        self.symbols = symbols or ["A", "B", "C", "D", "E"]
+        self.symbols = symbols or ["A", "B", "C", "D", "E", "F"]
         self.force_derangement = force_derangement
 
     def _mapping(self, rng: random.Random, force_derangement: bool) -> Dict[str, str]:
@@ -440,11 +441,15 @@ class CognitiveControlInhibitionSkill:
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for _ in range(n):
-            # Randomize force_derangement if set to "random"
-            if self.force_derangement == "random":
-                force_derangement = rng.choice([True, False])
-            else:
+            if isinstance(self.force_derangement, str):
+                if self.force_derangement == "random":
+                    force_derangement = rng.choice([True, False])
+                else:
+                    raise ValueError("force_derangement must be True, False, or 'random'")
+            elif isinstance(self.force_derangement, bool):
                 force_derangement = self.force_derangement
+            else:
+                raise ValueError("force_derangement must be True, False, or 'random'")
             
             m = self._mapping(rng, force_derangement)
             x = _choice(rng, self.symbols)
@@ -723,61 +728,61 @@ class FineMotorProxySkill:
 # 12) Social-emotional awareness
 # =========================
 
-class SocialEmotionalAwarenessSkill:
-    """
-    Resource alignment:
-    - SDQ: 25 items divided into 5 scales:
-      emotional symptoms, conduct problems, hyperactivity/inattention, peer problems, prosocial behaviour
-      https://www.sdqinfo.org/a0.html
-    - BiB Starting School includes SDQ for social/emotional health:
-      https://wellcomeopenresearch.org/articles/5-47/v1/pdf
+# class SocialEmotionalAwarenessSkill:
+#     """
+#     Resource alignment:
+#     - SDQ: 25 items divided into 5 scales:
+#       emotional symptoms, conduct problems, hyperactivity/inattention, peer problems, prosocial behaviour
+#       https://www.sdqinfo.org/a0.html
+#     - BiB Starting School includes SDQ for social/emotional health:
+#       https://wellcomeopenresearch.org/articles/5-47/v1/pdf
 
-    Implementation alignment (refined to better match SDQ’s structure):
-    - SDQ is not a “single correct answer about norms”; it’s a structured *categorization* into scales.
-    - We therefore implement a controlled proxy: define 5 SDQ-like scale labels as sets of action tokens,
-      then ask which scale a behavior belongs to.
-    - This mirrors the SDQ’s “items belong to one of 5 scales” structure, but avoids culture/language nuance.
-    """
+#     Implementation alignment (refined to better match SDQ's structure):
+#     - SDQ is not a “single correct answer about norms”; it's a structured *categorization* into scales.
+#     - We therefore implement a controlled proxy: define 5 SDQ-like scale labels as sets of action tokens,
+#       then ask which scale a behavior belongs to.
+#     - This mirrors the SDQ's “items belong to one of 5 scales” structure, but avoids culture/language nuance.
+#     """
 
-    name = "social_emotional_awareness"
+#     name = "social_emotional_awareness"
 
-    def __init__(
-        self,
-        # SDQ has 5 subscales; we mirror that with 5 controlled token sets.
-        emotional: Optional[List[str]] = None,
-        conduct: Optional[List[str]] = None,
-        hyperactivity: Optional[List[str]] = None,
-        peer: Optional[List[str]] = None,
-        prosocial: Optional[List[str]] = None,
-    ):
-        self.emotional = emotional or ["WORRY", "FEAR", "SAD"]
-        self.conduct = conduct or ["FIGHT", "LIE", "STEAL"]
-        self.hyperactivity = hyperactivity or ["RESTLESS", "IMPULSIVE", "DISTRACT"]
-        self.peer = peer or ["LONELY", "BULLIED", "ISOLATE"]
-        self.prosocial = prosocial or ["SHARE", "HELP", "KIND"]
+#     def __init__(
+#         self,
+#         # SDQ has 5 subscales; we mirror that with 5 controlled token sets.
+#         emotional: Optional[List[str]] = None,
+#         conduct: Optional[List[str]] = None,
+#         hyperactivity: Optional[List[str]] = None,
+#         peer: Optional[List[str]] = None,
+#         prosocial: Optional[List[str]] = None,
+#     ):
+#         self.emotional = emotional or ["WORRY", "FEAR", "SAD"]
+#         self.conduct = conduct or ["FIGHT", "LIE", "STEAL"]
+#         self.hyperactivity = hyperactivity or ["RESTLESS", "IMPULSIVE", "DISTRACT"]
+#         self.peer = peer or ["LONELY", "BULLIED", "ISOLATE"]
+#         self.prosocial = prosocial or ["SHARE", "HELP", "KIND"]
 
-        self.scale_map: Dict[str, List[str]] = {
-            "EMO": self.emotional,
-            "CON": self.conduct,
-            "HYP": self.hyperactivity,
-            "PEER": self.peer,
-            "PRO": self.prosocial,
-        }
+#         self.scale_map: Dict[str, List[str]] = {
+#             "EMO": self.emotional,
+#             "CON": self.conduct,
+#             "HYP": self.hyperactivity,
+#             "PEER": self.peer,
+#             "PRO": self.prosocial,
+#         }
 
-    def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
-        all_actions = [(scale, act) for scale, acts in self.scale_map.items() for act in acts]
+#     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
+#         out: List[Dict[str, Any]] = []
+#         all_actions = [(scale, act) for scale, acts in self.scale_map.items() for act in acts]
 
-        for _ in range(n):
-            gold_scale, act = _choice(rng, all_actions)
+#         for _ in range(n):
+#             gold_scale, act = _choice(rng, all_actions)
 
-            # Make the mapping explicit (like SDQ scale definitions), then query one "item".
-            # This keeps the task about *scale assignment structure* rather than real-world norms.
-            defs = " ; ".join([f"{k}={{{','.join(v)}}}" for k, v in self.scale_map.items()])
-            prompt = f"SCALES: {defs}\nITEM: {act}\nQ: scale(ITEM)=\nA:"
-            meta = {"item": act, "gold_scale": gold_scale, "note": "SDQ-like 5-scale categorization proxy"}
-            out.append(_fmt_item(self.name, prompt, gold_scale, meta))
-        return out
+#             # Make the mapping explicit (like SDQ scale definitions), then query one "item".
+#             # This keeps the task about *scale assignment structure* rather than real-world norms.
+#             defs = " ; ".join([f"{k}={{{','.join(v)}}}" for k, v in self.scale_map.items()])
+#             prompt = f"SCALES: {defs}\nITEM: {act}\nQ: scale(ITEM)=\nA:"
+#             meta = {"item": act, "gold_scale": gold_scale, "note": "SDQ-like 5-scale categorization proxy"}
+#             out.append(_fmt_item(self.name, prompt, gold_scale, meta))
+#         return out
 
 
 # =========================
@@ -805,56 +810,133 @@ class MetacognitiveSelfEstimationSkill:
 
     def __init__(
         self,
-        totals: Optional[List[int]] = None,
-        round_places: int = 2,
-        avoid_trivial: bool = True,   # avoid always d=0
+        list_of_skills: list = ["relational_reasoning",
+                        "rule_induction",
+                        "working_memory_maintenance",
+                        "working_memory_manipulation",
+                        "quantitative_reasoning",
+                        "cognitive_control_inhibition",
+                        "symbol_recognition",
+                        "vocabulary",
+                        "phonological_awareness",
+                        "instruction_comprehension",
+                        "fine_motor_proxy",
+                        # "social_emotional_awareness": 5,
+                        "metacognitive_self_estimation"]
     ):
-        self.totals = totals or [20, 25, 30, 33, 40]  # includes NEPS-like example counts (e.g., 33)
-        self.round_places = round_places
-        self.avoid_trivial = avoid_trivial
+        self.totals = list_of_skills
 
-    def _fmt_d(self, d: float) -> str:
-        # Fixed rounding -> stable target format.
-        return f"{d:.{self.round_places}f}"
+    def sample_one_per_skill_and_concat(
+        self,
+        items: List[Dict[str, Any]],
+        rng: random.Random,
+    ) -> Tuple[str, int, int, List[Dict[str, Any]]]:
+        # 1) Group by skill
+        by_skill: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for it in items:
+            by_skill[it["skill"]].append(it)
 
+        # 2) Pick one per skill (sorted for deterministic skill order in concatenation)
+        selected: List[Dict[str, Any]] = []
+        for skill in sorted(by_skill.keys()):
+            selected.append(_choice(rng, by_skill[skill]))  # or rng.choice(...)
+
+        # 3) Concatenate prompts
+        # Add a separator so boundaries are unambiguous
+        concat_prompt = "\n\n---\n\n".join(it["prompt"] for it in selected)
+
+        # 4) Count correct
+        n_correct = sum(1 for it in selected if it.get("meta", {}).get("correct") is True)
+        n_total = len(selected)
+
+        return concat_prompt, n_correct, n_total
+    
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
+
+        spec = BenchmarkSpec(
+        seed=rng.random(),
+        n_per_skill={
+            "relational_reasoning": n,
+            "rule_induction": n,
+            "working_memory_maintenance": n,
+            "working_memory_manipulation": n,
+            "quantitative_reasoning": n,
+            "cognitive_control_inhibition": n,
+            "symbol_recognition": n,
+            "vocabulary": n,
+            "phonological_awareness": n,
+            "instruction_comprehension": n,
+            "fine_motor_proxy": n,
+            # "social_emotional_awareness": n,
+        },
+        shuffle=False,
+        )
+
+        builder = BenchmarkBuilder(spec)
+        items = builder.generate()
+
+        wrong_choices_letters = [" A", " B", " C", " D", " E", " F", " G", " H", " I", " J"]
+        wrong_choices_xyz = [" X", " Y", " Z"]
+        wrong_choices_seq = [" 1 2 3 4", " 4 5 6 7", "8 9 1 2"]
+        wrong_choices_coord = [" (0,0)", " (1,1)", "(0, 1)", " (1,0)"]
+        wrong_choices_yesno = [" YES", " NO"]
+        wrong_choices_int = [" 1", " 2", " 3", " 4", " 5", " 6", " 7", " 8", " 9"]
+
+        # Map skill -> wrong-choice list
+        wrong_pool_by_skill = {
+            "fine_motor_proxy": wrong_choices_coord,                 # (x,y)
+            "instruction_comprehension": wrong_choices_yesno,        # YES/NO
+            "phonological_awareness": wrong_choices_letters,         # Letter
+            "vocabulary": wrong_choices_letters,                     # Letter
+            "symbol_recognition": wrong_choices_yesno,               # YES/NO
+            "cognitive_control_inhibition": wrong_choices_letters,   # Letter
+            "quantitative_reasoning": wrong_choices_letters,         # Letter
+            "working_memory_manipulation": wrong_choices_seq,        # number seq with spaces
+            "working_memory_maintenance": wrong_choices_int,         # int
+            "rule_induction": wrong_choices_xyz,                     # X/Y/Z
+            "relational_reasoning": wrong_choices_letters,           # Letter
+        }
+
+        # Build prompts with (sometimes wrong) answers appended
+        for item in items:
+            skill = item.get("skill")
+            gold = item["completion"]
+
+            # Default: keep correct unless we can confidently sample a wrong answer
+            completion = gold
+
+            # Decide whether to flip to a wrong answer (50/50)
+            if rng.choice([True, False]):
+                pool = wrong_pool_by_skill.get(skill)
+
+                if pool is not None:
+                    # Ensure the sampled wrong answer isn't accidentally the gold
+                    candidates = [c for c in pool if c != gold]
+                    if candidates:
+                        completion = rng.choice(candidates)
+                        item["meta"]["correct"] = False
+                    else:
+                        # Pool had only the gold; fall back to correct
+                        item["meta"]["correct"] = True
+            else:
+                item["meta"]["correct"] = True
+
+            # Concatenate prompt + (possibly modified) completion
+            item["prompt"] = item["prompt"] + completion
+
+
         for _ in range(n):
-            total = _choice(rng, self.totals)
-            correct = rng.randint(0, total)
+            concat_prompt, n_correct, n_total = self.sample_one_per_skill_and_concat(items, rng)
+            
+            prompt = concat_prompt + "\n\n---\n\n\nQ: How many were correct?\nA:"
+            gold = f" {n_correct}"
+            meta = {"n_total": n_total}
 
-            # estimated correct is the metacognitive judgment described in NEPS (post-diction)
-            est = rng.randint(0, total)
-
-            if self.avoid_trivial:
-                # Encourage non-zero deviations some fraction of time.
-                # (NEPS deviation score interpretation is most meaningful when d != 0.)
-                for _try in range(20):
-                    if est != correct:
-                        break
-                    est = rng.randint(0, total)
-
-            # NEPS definition: d = (N_estimated/N_items) - (N_correct/N_items)
-            d = (est / total) - (correct / total)
-            gold = self._fmt_d(d)
-
-            prompt = (
-                f"TEST: items={total}\n"
-                f"ACTUAL: correct={correct}\n"
-                f"SELF-EST: estimated_correct={est}\n"
-                f"Q: deviation_d=(estimated/items)-(correct/items)=\n"
-                f"A:"
-            )
-            meta = {
-                "total": total,
-                "correct": correct,
-                "estimated": est,
-                "d": d,
-                "interpretation": "d>0 overestimate; d<0 underestimate; d=0 perfect",
-                "source": "NEPS procedural metacognition deviation score definition",
-            }
             out.append(_fmt_item(self.name, prompt, gold, meta))
+
         return out
+
 
 
 # -------------------------
@@ -892,7 +974,7 @@ class BenchmarkBuilder:
             self._make(PhonologicalAwarenessSkill, "phonological_awareness"),
             self._make(InstructionComprehensionSkill, "instruction_comprehension"),
             self._make(FineMotorProxySkill, "fine_motor_proxy"),
-            self._make(SocialEmotionalAwarenessSkill, "social_emotional_awareness"),
+            # self._make(SocialEmotionalAwarenessSkill, "social_emotional_awareness"),
             self._make(MetacognitiveSelfEstimationSkill, "metacognitive_self_estimation"),
         ]
 
@@ -934,7 +1016,7 @@ if __name__ == "__main__":
             "phonological_awareness": 5,
             "instruction_comprehension": 5,
             "fine_motor_proxy": 5,
-            "social_emotional_awareness": 5,
+            # "social_emotional_awareness": 5,
             "metacognitive_self_estimation": 5,
         },
         overrides={

@@ -22,17 +22,18 @@ class Shortcut:
     LENGTH_HEURISTIC = "length_heuristic"
     FORMAT_KEYWORD_TRIGGER = "format_keyword_trigger"
     COPY_BIAS = "copy_bias"
+    TRAILING_SEQ_DISTRACTOR = "trailing_seq_distractor"
 
 
 SKILL_TO_SHORTCUTS: Dict[str, List[str]] = {
     "relational_reasoning": [
-        Shortcut.RECENCY_BIAS, Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER
+        Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER # , Shortcut.RECENCY_BIAS, 
     ],
     "rule_induction": [
-        Shortcut.RECENCY_BIAS, Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER
+        Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER # , Shortcut.RECENCY_BIAS
     ],
     "working_memory_maintenance": [
-        Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.RECENCY_BIAS, Shortcut.FORMAT_KEYWORD_TRIGGER
+        Shortcut.FORMAT_KEYWORD_TRIGGER, Shortcut.COPY_BIAS, Shortcut.TRAILING_SEQ_DISTRACTOR # , Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.RECENCY_BIAS, Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
     "working_memory_manipulation": [
         Shortcut.RECENCY_BIAS, Shortcut.FORMAT_KEYWORD_TRIGGER
@@ -41,28 +42,28 @@ SKILL_TO_SHORTCUTS: Dict[str, List[str]] = {
         Shortcut.LENGTH_HEURISTIC
     ],
     "cognitive_control_inhibition": [
-        Shortcut.RECENCY_BIAS, Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER, Shortcut.COPY_BIAS
+        Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER, Shortcut.COPY_BIAS # , Shortcut.RECENCY_BIAS
     ],
     "symbol_recognition": [
-        Shortcut.LABEL_RENAMING_INVARIANCE, Shortcut.FORMAT_KEYWORD_TRIGGER
+        Shortcut.FORMAT_KEYWORD_TRIGGER # , Shortcut.LABEL_RENAMING_INVARIANCE
     ],
     "vocabulary": [
-        Shortcut.FIRST_OPTION_BIAS, Shortcut.LABEL_RENAMING_INVARIANCE
+        Shortcut.COPY_BIAS, Shortcut.LENGTH_HEURISTIC # , Shortcut.FIRST_OPTION_BIAS, Shortcut.LABEL_RENAMING_INVARIANCE
     ],
     "phonological_awareness": [
-        Shortcut.FIRST_OPTION_BIAS, Shortcut.LABEL_RENAMING_INVARIANCE, Shortcut.FORMAT_KEYWORD_TRIGGER
+        Shortcut.FORMAT_KEYWORD_TRIGGER # , Shortcut.FIRST_OPTION_BIAS, Shortcut.LABEL_RENAMING_INVARIANCE
     ],
     "instruction_comprehension": [
-        Shortcut.LABEL_RENAMING_INVARIANCE, Shortcut.FORMAT_KEYWORD_TRIGGER
+        Shortcut.FORMAT_KEYWORD_TRIGGER # , Shortcut.LABEL_RENAMING_INVARIANCE
     ],
     "fine_motor_proxy": [
         Shortcut.RECENCY_BIAS, Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
-    "social_emotional_awareness": [
-        Shortcut.LABEL_RENAMING_INVARIANCE, Shortcut.RECENCY_BIAS
-    ],
+    # "social_emotional_awareness": [
+    #     Shortcut.LABEL_RENAMING_INVARIANCE # , Shortcut.RECENCY_BIAS
+    # ],
     "metacognitive_self_estimation": [
-        Shortcut.FORMAT_KEYWORD_TRIGGER
+        Shortcut.COPY_BIAS # , Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
 }
 
@@ -153,19 +154,22 @@ class CounterfactualTransformer:
         key = (skill, shortcut)
         return {
             # relational_reasoning
-            ("relational_reasoning", Shortcut.RECENCY_BIAS): self._rr_reorder_facts,
+            # ("relational_reasoning", Shortcut.RECENCY_BIAS): self._rr_reorder_facts,    # Problematic
             ("relational_reasoning", Shortcut.LAST_TOKEN_HEURISTIC): self._rr_add_trailing_distractor_symbol,
             ("relational_reasoning", Shortcut.FORMAT_KEYWORD_TRIGGER): self._rr_rename_query_token,
 
             # rule_induction
-            ("rule_induction", Shortcut.RECENCY_BIAS): self._ri_shuffle_examples,
+            # ("rule_induction", Shortcut.RECENCY_BIAS): self._ri_shuffle_examples,   # Problematic
             ("rule_induction", Shortcut.LAST_TOKEN_HEURISTIC): self._ri_add_trailing_equation_noise,
             ("rule_induction", Shortcut.FORMAT_KEYWORD_TRIGGER): self._ri_rename_ex_q_tokens,
 
             # WM maint/manip
-            ("working_memory_maintenance", Shortcut.LAST_TOKEN_HEURISTIC): self._wm_maint_make_last_token_wrong,
-            ("working_memory_maintenance", Shortcut.RECENCY_BIAS): self._wm_maint_rotate_sequence,
-            ("working_memory_maintenance", Shortcut.FORMAT_KEYWORD_TRIGGER): self._wm_maint_rename_kth_token,
+            # ("working_memory_maintenance", Shortcut.LAST_TOKEN_HEURISTIC): self._wm_maint_make_last_token_wrong,
+            # ("working_memory_maintenance", Shortcut.RECENCY_BIAS): self._wm_maint_rotate_sequence,
+            # ("working_memory_maintenance", Shortcut.FORMAT_KEYWORD_TRIGGER): self._wm_maint_rename_kth_token,
+            ("working_memory_maintenance", Shortcut.TRAILING_SEQ_DISTRACTOR): self._wm_maint_add_trailing_noise,
+            ("working_memory_maintenance", Shortcut.FORMAT_KEYWORD_TRIGGER): self._wm_maint_rename_markers,
+            ("working_memory_maintenance", Shortcut.COPY_BIAS): self._wm_maint_add_conflicting_hint,
 
             ("working_memory_manipulation", Shortcut.RECENCY_BIAS): self._wm_manip_insert_irrelevant_prefix,
             ("working_memory_manipulation", Shortcut.FORMAT_KEYWORD_TRIGGER): self._wm_manip_rename_rev_token,
@@ -174,26 +178,28 @@ class CounterfactualTransformer:
             ("quantitative_reasoning", Shortcut.LENGTH_HEURISTIC): self._quant_break_length_proxy,
 
             # inhibition
-            ("cognitive_control_inhibition", Shortcut.RECENCY_BIAS): self._inh_shuffle_mapping_order,
+            # ("cognitive_control_inhibition", Shortcut.RECENCY_BIAS): self._inh_shuffle_mapping_order,   # Problematic
             ("cognitive_control_inhibition", Shortcut.LAST_TOKEN_HEURISTIC): self._inh_append_query_distractor,
             ("cognitive_control_inhibition", Shortcut.FORMAT_KEYWORD_TRIGGER): self._inh_rename_map_token,
             ("cognitive_control_inhibition", Shortcut.COPY_BIAS): self._inh_add_conflicting_hint,
 
             # symbol recognition
-            ("symbol_recognition", Shortcut.LABEL_RENAMING_INVARIANCE): self._symrec_swap_yes_no,
+            # ("symbol_recognition", Shortcut.LABEL_RENAMING_INVARIANCE): self._symrec_swap_yes_no,   # Problematic
             ("symbol_recognition", Shortcut.FORMAT_KEYWORD_TRIGGER): self._symrec_rename_member_token,
 
             # vocabulary (MC)
-            ("vocabulary", Shortcut.FIRST_OPTION_BIAS): self._mc_shuffle_options_letters,
-            ("vocabulary", Shortcut.LABEL_RENAMING_INVARIANCE): self._mc_permute_option_letters_only,
+            # ("vocabulary", Shortcut.FIRST_OPTION_BIAS): self._mc_shuffle_options_letters,   # Problematic
+            # ("vocabulary", Shortcut.LABEL_RENAMING_INVARIANCE): self._mc_permute_option_letters_only,   # Ok but changes answer (Problematic)
+            ("vocabulary", Shortcut.COPY_BIAS): self._mc_add_conflicting_hint,
+            ("vocabulary", Shortcut.LENGTH_HEURISTIC): self._mc_add_irrelevant_dict_entry,   
 
             # phonological (MC)
-            ("phonological_awareness", Shortcut.FIRST_OPTION_BIAS): self._mc_shuffle_options_letters,
-            ("phonological_awareness", Shortcut.LABEL_RENAMING_INVARIANCE): self._mc_permute_option_letters_only,
+            # ("phonological_awareness", Shortcut.FIRST_OPTION_BIAS): self._mc_shuffle_options_letters,   # Problematic
+            # ("phonological_awareness", Shortcut.LABEL_RENAMING_INVARIANCE): self._mc_permute_option_letters_only,   # Ok but changes answer (Problematic)
             ("phonological_awareness", Shortcut.FORMAT_KEYWORD_TRIGGER): self._phon_rename_rhyme_token,
 
             # instruction comprehension
-            ("instruction_comprehension", Shortcut.LABEL_RENAMING_INVARIANCE): self._instr_swap_yes_no,
+            # ("instruction_comprehension", Shortcut.LABEL_RENAMING_INVARIANCE): self._instr_swap_yes_no,     # Problematic
             ("instruction_comprehension", Shortcut.FORMAT_KEYWORD_TRIGGER): self._instr_rename_rule_token,
 
             # fine motor proxy
@@ -201,11 +207,12 @@ class CounterfactualTransformer:
             ("fine_motor_proxy", Shortcut.FORMAT_KEYWORD_TRIGGER): self._motor_rename_move_token,
 
             # social-emotional
-            ("social_emotional_awareness", Shortcut.LABEL_RENAMING_INVARIANCE): self._soc_rename_scale_labels,
-            ("social_emotional_awareness", Shortcut.RECENCY_BIAS): self._soc_shuffle_scale_def_order,
+            # ("social_emotional_awareness", Shortcut.LABEL_RENAMING_INVARIANCE): self._soc_rename_scale_labels,
+            # ("social_emotional_awareness", Shortcut.RECENCY_BIAS): self._soc_shuffle_scale_def_order,   # Problematic
 
             # metacognition
-            ("metacognitive_self_estimation", Shortcut.FORMAT_KEYWORD_TRIGGER): self._meta_rename_deviation_token,
+            # ("metacognitive_self_estimation", Shortcut.FORMAT_KEYWORD_TRIGGER): self._meta_rename_deviation_token,
+            ("metacognitive_self_estimation", Shortcut.COPY_BIAS): self._meta_add_noisy_illustration,
         }.get(key)
 
     # -------------------------
@@ -350,6 +357,63 @@ class CounterfactualTransformer:
         # Disputes keyword-trigger on "kth": rename the query marker while preserving meaning.
         it["prompt"] = it["prompt"].replace("th=", "pos=")
         it["meta"]["cf_edit"] = "renamed_kth_to_pos"
+        return it
+
+    def _wm_maint_rename_markers(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
+        """
+        Disputes FORMAT_KEYWORD_TRIGGER: rename SEQ: -> LIST: and th= -> pos=
+        to test if model relies on specific keywords rather than task understanding.
+        """
+        prompt = it["prompt"]
+        prompt = prompt.replace("SEQ:", "LIST:")
+        prompt = prompt.replace("th=", "pos=")
+        it["prompt"] = prompt
+        it["meta"]["cf_edit"] = "renamed_seq_and_th_markers"
+        return it
+
+    def _wm_maint_add_conflicting_hint(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
+        """
+        Disputes COPY_BIAS: add HINT: <wrong_element> before the Q: line.
+        The model must ignore this salient distractor and retrieve from memory.
+        """
+        prompt = it["prompt"]
+        gold = _gold(it)
+        
+        # Parse the sequence to find wrong elements
+        m = re.search(r"^SEQ:\s*(.+)$", prompt, flags=re.M)
+        if not m:
+            return it
+        
+        seq = m.group(1).split()
+        # Pick a wrong element (different from gold)
+        wrong_elements = [e for e in seq if e != gold]
+        if not wrong_elements:
+            return it
+        
+        wrong_hint = rng.choice(wrong_elements)
+        
+        # Insert HINT: <wrong_element> before the Q: line
+        it["prompt"] = re.sub(r"\nQ:", f"\nHINT: {wrong_hint}\nQ:", prompt)
+        it["meta"]["cf_edit"] = "added_conflicting_hint_wrong_element"
+        it["meta"]["cf_hint"] = wrong_hint
+        return it
+
+    def _wm_maint_add_trailing_noise(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
+        """
+        Disputes LAST_TOKEN_HEURISTIC: add NOTE: <distractor> after SEQ line.
+        The model might copy this trailing token instead of retrieving from memory.
+        """
+        prompt = it["prompt"]
+        gold = _gold(it)
+        
+        # Pick a distractor that is NOT the gold
+        distractors = ["X", "Y", "Z", "W"]
+        distractor = next((d for d in distractors if d != gold), "X")
+        
+        # Insert NOTE: <distractor> after the SEQ line
+        it["prompt"] = re.sub(r"^(SEQ:\s*.+)$", f"\\1\nNOTE: {distractor}", prompt, flags=re.M)
+        it["meta"]["cf_edit"] = "added_trailing_noise_token"
+        it["meta"]["cf_distractor"] = distractor
         return it
 
     # --- WM manipulation ---
@@ -544,6 +608,79 @@ class CounterfactualTransformer:
         _set_gold(it, new_gold)
         it["meta"]["cf_edit"] = "renamed_option_letters_updated_gold"
         return it
+    
+    def _mc_add_conflicting_hint(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
+        """
+        Adds a HINT line showing a WRONG meaning to test copy-bias inhibition.
+        For vocabulary format:
+            DICT: wug=BLUE, toma=YELLOW, dax=RED, blicket=GREEN
+            WORD: dax
+            A:YELLOW B:GREEN C:BLUE D:RED
+            Q: meaning(WORD)=
+            A:
+        We insert HINT: <wrong_meaning> before the Q: line.
+        The model must suppress this explicit distractor cue and apply the mapping.
+        """
+        prompt = it["prompt"]
+        gold = _gold(it)  # e.g., "D" for the correct option letter
+        
+        # Parse the options to find wrong meanings
+        try:
+            letters, mapping = self._parse_mc_options(prompt)
+        except ValueError:
+            return it
+        
+        if gold not in mapping:
+            return it
+        
+        # Pick a wrong letter (different from the correct one)
+        wrong_letters = [L for L in letters if L != gold]
+        if not wrong_letters:
+            return it
+        
+        wrong_hint = rng.choice(wrong_letters)
+        
+        # Insert HINT: <wrong_letter> before the Q: line
+        it["prompt"] = prompt.replace("Q: meaning(WORD)=", f"HINT: {wrong_hint}\nQ: meaning(WORD)=")
+        it["meta"]["cf_edit"] = "added_conflicting_hint_wrong_letter"
+        it["meta"]["cf_hint"] = wrong_hint
+        return it
+
+    def _mc_add_irrelevant_dict_entry(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
+        """
+        Adds an irrelevant DICT entry to test length heuristic.
+        For vocabulary format, we add an extra word→meaning pair that is never queried.
+        This increases prompt length without changing the answer.
+        """
+        prompt = it["prompt"]
+        
+        # Parse existing DICT entries
+        m = re.search(r"^DICT:\s*(.+)$", prompt, flags=re.M)
+        if not m:
+            return it
+        
+        dict_str = m.group(1)
+        # Extract existing words to avoid collision
+        existing_words = re.findall(r"(\w+)=", dict_str)
+        existing_meanings = re.findall(r"=(\w+)", dict_str)
+        
+        # Generate novel nonsense words that don't collide
+        novel_words = ["zorp", "flink", "glorp", "snib", "plonk", "quib"]
+        novel_meanings = ["PURPLE", "ORANGE", "PINK", "CYAN", "GRAY", "WHITE"]
+        
+        # Pick one that doesn't exist
+        new_word = next((w for w in novel_words if w not in existing_words), None)
+        new_meaning = next((m for m in novel_meanings if m not in existing_meanings), None)
+        
+        if not new_word or not new_meaning:
+            return it
+        
+        # Add the new entry to the DICT line
+        new_dict_str = f"{dict_str}, {new_word}={new_meaning}"
+        it["prompt"] = prompt.replace(f"DICT: {dict_str}", f"DICT: {new_dict_str}")
+        it["meta"]["cf_edit"] = "added_irrelevant_dict_entry"
+        it["meta"]["cf_extra_entry"] = f"{new_word}={new_meaning}"
+        return it
 
     # --- Phonology keyword trigger ---
 
@@ -645,18 +782,48 @@ class CounterfactualTransformer:
         it["prompt"] = it["prompt"].replace("deviation_d", "delta_d")
         it["meta"]["cf_edit"] = "renamed_deviation_token"
         return it
+    
+    def _meta_add_noisy_illustration(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
+        """
+        Disputes anchoring / boundary discipline:
+        Insert a misleading HINT line between the final Q and A.
+        """
+        prompt = it["prompt"]
+
+        # Match the final metacognitive question block:
+        # group(1): the Q line (with trailing newline)
+        # group(2): the A: line
+        m = re.search(
+            r"(Q:\s*How many were correct\?\s*\n)(A:)",
+            prompt
+        )
+        if not m:
+            return it
+
+        hint = "HINT: 11\n"
+
+        # Reconstruct prompt with hint inserted between Q and A
+        it["prompt"] = (
+            prompt[: m.start(2)] +
+            hint +
+            prompt[m.start(2):]
+        )
+
+        it["meta"]["cf_edit"] = "added_noisy_hint_between_q_and_a"
+        return it
+
 
 # -------------------------
 # Dataset generation
 # -------------------------
 
-def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/dataset.json"):
+def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/dataset.json", seed: int = 42):
     from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
     rng = random.Random(0)
 
-    # 1) Build a small dataset (one sample per skill) using your existing BenchmarkBuilder
+    # 1) Build a dataset using your existing BenchmarkBuilder
     spec = BenchmarkSpec(
-        seed=42,        # Put as arg
+        seed=seed,        # Put as arg
         n_per_skill={
             "relational_reasoning": n_samples_per_skill,
             "rule_induction": n_samples_per_skill,
@@ -669,7 +836,7 @@ def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/
             "phonological_awareness": n_samples_per_skill,
             "instruction_comprehension": n_samples_per_skill,
             "fine_motor_proxy": n_samples_per_skill,
-            "social_emotional_awareness": n_samples_per_skill,
+            # "social_emotional_awareness": n_samples_per_skill,
             "metacognitive_self_estimation": n_samples_per_skill,
         },
         shuffle=False,
@@ -677,6 +844,11 @@ def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/
 
     builder = BenchmarkBuilder(spec)
     base_items = builder.generate()
+
+    unique_bases = {}
+    for it in base_items:
+        unique_bases.setdefault(it["prompt"], it)
+    base_items = list(unique_bases.values())
 
     # 2) Create the counterfactual transformer
     tfm = CounterfactualTransformer()
@@ -747,7 +919,7 @@ if __name__ == "__main__":
             "phonological_awareness": 1,
             "instruction_comprehension": 1,
             "fine_motor_proxy": 1,
-            "social_emotional_awareness": 1,
+            # "social_emotional_awareness": 1,
             "metacognitive_self_estimation": 1,
         },
         shuffle=False,
