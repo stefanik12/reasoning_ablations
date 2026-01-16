@@ -420,9 +420,9 @@ class CognitiveControlInhibitionSkill:
     def __init__(
         self,
         symbols: Optional[List[str]] = None,
-        force_derangement: str = "random",  # True, False, or "random"
+        force_derangement = True,  # True, False, or "random"
     ):
-        self.symbols = symbols or ["A", "B", "C", "D", "E"]
+        self.symbols = symbols or ["A", "B", "C", "D", "E", "F"]
         self.force_derangement = force_derangement
 
     def _mapping(self, rng: random.Random, force_derangement: bool) -> Dict[str, str]:
@@ -440,11 +440,15 @@ class CognitiveControlInhibitionSkill:
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for _ in range(n):
-            # Randomize force_derangement if set to "random"
-            if self.force_derangement == "random":
-                force_derangement = rng.choice([True, False])
-            else:
+            if isinstance(self.force_derangement, str):
+                if self.force_derangement == "random":
+                    force_derangement = rng.choice([True, False])
+                else:
+                    raise ValueError("force_derangement must be True, False, or 'random'")
+            elif isinstance(self.force_derangement, bool):
                 force_derangement = self.force_derangement
+            else:
+                raise ValueError("force_derangement must be True, False, or 'random'")
             
             m = self._mapping(rng, force_derangement)
             x = _choice(rng, self.symbols)
@@ -732,11 +736,11 @@ class SocialEmotionalAwarenessSkill:
     - BiB Starting School includes SDQ for social/emotional health:
       https://wellcomeopenresearch.org/articles/5-47/v1/pdf
 
-    Implementation alignment (refined to better match SDQ’s structure):
-    - SDQ is not a “single correct answer about norms”; it’s a structured *categorization* into scales.
+    Implementation alignment (refined to better match SDQ's structure):
+    - SDQ is not a “single correct answer about norms”; it's a structured *categorization* into scales.
     - We therefore implement a controlled proxy: define 5 SDQ-like scale labels as sets of action tokens,
       then ask which scale a behavior belongs to.
-    - This mirrors the SDQ’s “items belong to one of 5 scales” structure, but avoids culture/language nuance.
+    - This mirrors the SDQ's “items belong to one of 5 scales” structure, but avoids culture/language nuance.
     """
 
     name = "social_emotional_awareness"
