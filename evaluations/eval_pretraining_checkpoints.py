@@ -47,7 +47,7 @@ SCHOOLBENCH_CONFIG = {
 
 def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
     """Returns sorted list of branches matching step intervals."""
-    logger.info(f"Fetching branches from {repo_id}...")
+    logger.warning(f"Fetching branches from {repo_id}...")
     try:
         refs = list_repo_refs(repo_id)
     except (OSError, ValueError) as e:
@@ -65,13 +65,13 @@ def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
                 branches.append({"step": step, "name": b.name})
 
     sorted_branches = sorted(branches, key=lambda x: x["step"])
-    logger.info(f"Identified {len(sorted_branches)} target branches.")
+    logger.warning(f"Identified {len(sorted_branches)} target branches.")
     return sorted_branches
 
 
 def cleanup_cache(repo_id: str, revision: str):
     """Deletes specific revision from HF cache."""
-    logger.info(f"Attempting to clean cache for revision: {revision}")
+    logger.warning(f"Attempting to clean cache for revision: {revision}")
     try:
         info = scan_cache_dir()
         repo = next((r for r in info.repos if r.repo_id == repo_id), None)
@@ -79,7 +79,7 @@ def cleanup_cache(repo_id: str, revision: str):
             for rev in repo.revisions:
                 if revision in rev.refs:
                     rev.delete_strategy.execute()
-                    logger.info(f"Successfully deleted cache for {revision}")
+                    logger.warning(f"Successfully deleted cache for {revision}")
                     return
         logger.warning(f"Revision {revision} not found in cache during cleanup.")
     except (OSError, ValueError) as e:
@@ -103,7 +103,7 @@ def get_processed_steps(csv_path: str) -> set:
 
 def prepare_data() -> List[Dict[str, Any]]:
     """Generates the Paired (Base + CF) dataset."""
-    logger.info("Generating evaluation dataset...")
+    logger.warning("Generating evaluation dataset...")
 
     # Handle n_per_skill configuration
     n_cfg = SCHOOLBENCH_CONFIG["n_per_skill"]
@@ -135,7 +135,7 @@ def prepare_data() -> List[Dict[str, Any]]:
 
         pairs.append({"base": item, "cf": cf_item})
 
-    logger.info(f"Dataset ready: {len(pairs)} items generated.")
+    logger.warning(f"Dataset ready: {len(pairs)} items generated.")
     return pairs
 
 
@@ -149,7 +149,7 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
     # Per-Skill Counters
     skill_stats = defaultdict(lambda: {"base_correct": 0, "base_total": 0, "cf_correct": 0, "cf_total": 0})
 
-    logger.info(f"Starting evaluation for {model_id}...")
+    logger.warning(f"Starting evaluation for {model_id}...")
 
     # We open the file here to stream results row-by-row
     file_exists = os.path.exists(SAMPLES_CSV)
@@ -228,7 +228,7 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
             # Only write to CSV, do not print to stdout
             writer.writerow(row)
 
-    logger.info(f"Finished evaluation for {model_id}.")
+    logger.warning(f"Finished evaluation for {model_id}.")
 
     # --- Metrics ---
     metrics = {
@@ -258,7 +258,7 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
 def main():
     branches = get_target_branches(REPO_ID, STEP_INTERVAL)
     completed_steps = get_processed_steps(METRICS_CSV)
-    logger.info(f"Found {len(branches)} total checkpoints. {len(completed_steps)} already completed.")
+    logger.warning(f"Found {len(branches)} total checkpoints. {len(completed_steps)} already completed.")
 
     eval_data = prepare_data()
 
@@ -270,23 +270,23 @@ def main():
         metrics_fieldnames.append(f"skill.{skill}.cf_acc")
         metrics_fieldnames.append(f"skill.{skill}.gap")
 
-    logger.info(f"CSV Headers will include metrics for skills: {all_skills}")
+    logger.warning(f"CSV Headers will include metrics for skills: {all_skills}")
 
     for b in branches:
         step = b["step"]
         branch_name = b["name"]
 
         if step in completed_steps:
-            logger.info(f"Skipping step {step} (already in {METRICS_CSV})")
+            logger.warning(f"Skipping step {step} (already in {METRICS_CSV})")
             continue
 
-        logger.info(f"Processing Step {step} ({branch_name})")
+        logger.warning(f"Processing Step {step} ({branch_name})")
 
         model = None
         tokenizer = None
 
         try:
-            logger.info(f"Loading model {branch_name}...")
+            logger.warning(f"Loading model {branch_name}...")
             tokenizer = AutoTokenizer.from_pretrained(REPO_ID, revision=branch_name, trust_remote_code=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -309,7 +309,7 @@ def main():
                     writer.writeheader()
                 writer.writerow(metrics)
 
-            logger.info(f"Saved aggregated metrics to {METRICS_CSV}")
+            logger.warning(f"Saved aggregated metrics to {METRICS_CSV}")
 
         finally:
             if model is not None: del model
