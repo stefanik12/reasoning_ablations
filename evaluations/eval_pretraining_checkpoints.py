@@ -1,27 +1,35 @@
-import os
-import re
+import argparse
 import csv
-import json
 import gc
-import torch
 import logging
+import os
 import random
+import re
 from collections import defaultdict
 from typing import List, Dict, Any
 
+import torch
 from huggingface_hub import list_repo_refs, scan_cache_dir
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # --- Import your internal libraries ---
-from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
 from evaluations.counterfactual_transform import CounterfactualTransformer
+from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
 
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 # Toggle these to switch between OLMo and Pythia testing
 # REPO_ID = "allenai/OLMo-7B"
-REPO_ID = "EleutherAI/pythia-14m"
+# REPO_ID = "EleutherAI/pythia-14m"
+# REPO_ID = "swiss-ai/Apertus-8B-2509"
+
+parser = argparse.ArgumentParser(description="Run SchoolBench evaluation on model checkpoints.")
+parser.add_argument("repo_id", type=str, help="Target HuggingFace repository ID (e.g., 'swiss-ai/Apertus-70B-2509')")
+args = parser.parse_args()
+
+# --- Configuration ---
+REPO_ID = args.repo_id  # Dynamic value from CLI
 
 STEP_INTERVAL = 10000
 METRICS_CSV = "schoolbench_%s_metrics.csv" % REPO_ID.split("/")[-1]
@@ -31,7 +39,7 @@ CLEAN_CACHE = True
 SCHOOLBENCH_CONFIG = {
     "seed": 42,
     "cf_seed": 123,
-    "n_per_skill": 2,  # Items per skill
+    "n_per_skill": 1000,  # Items per skill
     "shuffle": False,
     "max_new_tokens": 10
 }
