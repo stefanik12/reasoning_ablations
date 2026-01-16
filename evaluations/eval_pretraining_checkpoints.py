@@ -280,7 +280,7 @@ def main():
         try:
             # 1. Load Resources
             logger.info(f"Loading model {branch_name}...")
-            tokenizer = AutoTokenizer.from_pretrained(REPO_ID, revision=branch_name)
+            tokenizer = AutoTokenizer.from_pretrained(REPO_ID, revision=branch_name, trust_remote_code=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
