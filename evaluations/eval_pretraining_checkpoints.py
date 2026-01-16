@@ -26,7 +26,7 @@ REPO_ID = "EleutherAI/pythia-14m"
 STEP_INTERVAL = 10000
 METRICS_CSV = "schoolbench_%s_metrics.csv" % REPO_ID.split("/")[-1]
 SAMPLES_CSV = "schoolbench_%s_samples.csv" % REPO_ID.split("/")[-1]
-CLEAN_CACHE = False
+CLEAN_CACHE = True
 
 SCHOOLBENCH_CONFIG = {
     "seed": 42,
@@ -138,17 +138,16 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
     correct_cf = 0
     count_cf = 0
 
-    # Per-Skill Counters: {skill_name: {base_c, base_t, cf_c, cf_t}}
+    # Per-Skill Counters
     skill_stats = defaultdict(lambda: {"base_correct": 0, "base_total": 0, "cf_correct": 0, "cf_total": 0})
 
-    logger.info(f"Starting evaluation for {model_id}. Streaming samples to stdout/CSV...")
+    logger.info(f"Starting evaluation for {model_id}...")
 
-    header = "model_id,skill,prompt,prediction,cf_prompt,cf_prediction"
-    print(header)
-
+    # We open the file here to stream results row-by-row
     file_exists = os.path.exists(SAMPLES_CSV)
     with open(SAMPLES_CSV, "a", newline="", encoding="utf-8") as f_samp:
-        writer = csv.DictWriter(f_samp, fieldnames=header.split(","))
+        fieldnames = ["model_id", "skill", "prompt", "prediction", "cf_prompt", "cf_prediction"]
+        writer = csv.DictWriter(f_samp, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
 
@@ -165,30 +164,40 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
             if cf:
                 skill_stats[skill]["cf_total"] += 1
 
-            # --- Generation ---
+            # --- Generation (UNIVERSAL FIX) ---
             def generate(prompt):
-                inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+                # 1. Tokenize
+                raw_inputs = tokenizer(prompt, return_tensors="pt")
+
+                # 2. Filter & Move to Device (Exclude token_type_ids for OLMo)
+                model_inputs = {
+                    k: v.to(model.device) for k, v in raw_inputs.items()
+                    if k != "token_type_ids"
+                }
+
+                # 3. Generate
                 with torch.no_grad():
                     out = model.generate(
-                            **inputs,
+                            **model_inputs,
                             max_new_tokens=SCHOOLBENCH_CONFIG["max_new_tokens"],
                             do_sample=False,
                             pad_token_id=tokenizer.pad_token_id
                     )
-                return tokenizer.decode(out[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
+
+                # 4. Decode
+                input_len = model_inputs["input_ids"].shape[1]
+                return tokenizer.decode(out[0][input_len:], skip_special_tokens=True).strip()
 
             base_pred = generate(base["prompt"])
             cf_pred = generate(cf["prompt"]) if cf else ""
 
-            # --- Scoring (Exact Match) ---
-            # Base
+            # --- Scoring ---
             base_gold = base.get("gold", base.get("completion", "")).strip()
             base_hit = (base_gold and base_pred == base_gold)
             if base_hit:
                 correct_base += 1
                 skill_stats[skill]["base_correct"] += 1
 
-            # Counterfactual
             if cf:
                 count_cf += 1
                 cf_gold = cf.get("gold", cf.get("completion", "")).strip()
@@ -206,13 +215,12 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
                 "cf_prompt": cf["prompt"] if cf else "",
                 "cf_prediction": cf_pred
             }
-            print(
-                f"{model_id},{skill},{repr(row['prompt'])},{repr(row['prediction'])},{repr(row['cf_prompt'])},{repr(row['cf_prediction'])}")
+            # Only write to CSV, do not print to stdout
             writer.writerow(row)
 
     logger.info(f"Finished evaluation for {model_id}.")
 
-    # --- Build Metrics Dictionary ---
+    # --- Metrics ---
     metrics = {
         "step": step_num,
         "branch": model_id,
@@ -221,22 +229,15 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
         "n_samples": len(pairs)
     }
 
-    # Add Per-Skill Metrics
+    # Per-Skill Metrics
     for skill, stats in skill_stats.items():
-        # Base Accuracy
         b_acc = stats["base_correct"] / stats["base_total"] if stats["base_total"] > 0 else 0.0
+        c_acc = stats["cf_correct"] / stats["cf_total"] if stats["cf_total"] > 0 else 0.0
+
         metrics[f"skill.{skill}.base_acc"] = b_acc
+        metrics[f"skill.{skill}.cf_acc"] = c_acc
 
-        # CF Accuracy
-        c_acc = 0.0
         if stats["cf_total"] > 0:
-            c_acc = stats["cf_correct"] / stats["cf_total"]
-            metrics[f"skill.{skill}.cf_acc"] = c_acc
-        else:
-            metrics[f"skill.{skill}.cf_acc"] = 0.0  # Or "N/A" if you prefer, but 0.0 keeps CSV clean
-
-        # Gap (Robustness)
-        if stats["base_total"] > 0 and stats["cf_total"] > 0:
             metrics[f"skill.{skill}.gap"] = b_acc - c_acc
         else:
             metrics[f"skill.{skill}.gap"] = 0.0
@@ -251,10 +252,8 @@ def main():
 
     eval_data = prepare_data()
 
-    # --- Pre-calculate Fieldnames for CSV Header ---
-    # We must scan the data to know all possible skills to ensure the CSV header is valid
+    # Pre-calculate CSV Headers for Metrics file
     all_skills = sorted(list(set(item["base"].get("skill", "unknown") for item in eval_data)))
-
     metrics_fieldnames = ["step", "branch", "base_acc", "cf_acc", "n_samples"]
     for skill in all_skills:
         metrics_fieldnames.append(f"skill.{skill}.base_acc")
@@ -263,7 +262,6 @@ def main():
 
     logger.info(f"CSV Headers will include metrics for skills: {all_skills}")
 
-    # --- Main Loop ---
     for b in branches:
         step = b["step"]
         branch_name = b["name"]
@@ -278,7 +276,6 @@ def main():
         tokenizer = None
 
         try:
-            # 1. Load Resources
             logger.info(f"Loading model {branch_name}...")
             tokenizer = AutoTokenizer.from_pretrained(REPO_ID, revision=branch_name, trust_remote_code=True)
             if tokenizer.pad_token is None:
@@ -293,13 +290,10 @@ def main():
             )
             model.eval()
 
-            # 2. Evaluate
             metrics = evaluate_checkpoint(model, tokenizer, eval_data, step, branch_name)
 
-            # 3. Save Metrics
             file_exists = os.path.exists(METRICS_CSV)
             with open(METRICS_CSV, "a", newline="", encoding="utf-8") as f:
-                # Use extrasaction='ignore' just in case, though we calculated headers carefully
                 writer = csv.DictWriter(f, fieldnames=metrics_fieldnames, extrasaction='ignore')
                 if not file_exists:
                     writer.writeheader()
@@ -308,15 +302,10 @@ def main():
             logger.info(f"Saved aggregated metrics to {METRICS_CSV}")
 
         finally:
-            # 4. Cleanup
-            if model is not None:
-                del model
-            if tokenizer is not None:
-                del tokenizer
-
+            if model is not None: del model
+            if tokenizer is not None: del tokenizer
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
 
             if CLEAN_CACHE:
                 cleanup_cache(REPO_ID, branch_name)
