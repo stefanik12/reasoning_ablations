@@ -59,11 +59,11 @@ SKILL_TO_SHORTCUTS: Dict[str, List[str]] = {
     "fine_motor_proxy": [
         Shortcut.RECENCY_BIAS, Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
-    "social_emotional_awareness": [
-        Shortcut.LABEL_RENAMING_INVARIANCE # , Shortcut.RECENCY_BIAS
-    ],
+    # "social_emotional_awareness": [
+    #     Shortcut.LABEL_RENAMING_INVARIANCE # , Shortcut.RECENCY_BIAS
+    # ],
     "metacognitive_self_estimation": [
-        Shortcut.FORMAT_KEYWORD_TRIGGER
+        Shortcut.COPY_BIAS # , Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
 }
 
@@ -207,11 +207,12 @@ class CounterfactualTransformer:
             ("fine_motor_proxy", Shortcut.FORMAT_KEYWORD_TRIGGER): self._motor_rename_move_token,
 
             # social-emotional
-            ("social_emotional_awareness", Shortcut.LABEL_RENAMING_INVARIANCE): self._soc_rename_scale_labels,
+            # ("social_emotional_awareness", Shortcut.LABEL_RENAMING_INVARIANCE): self._soc_rename_scale_labels,
             # ("social_emotional_awareness", Shortcut.RECENCY_BIAS): self._soc_shuffle_scale_def_order,   # Problematic
 
             # metacognition
-            ("metacognitive_self_estimation", Shortcut.FORMAT_KEYWORD_TRIGGER): self._meta_rename_deviation_token,
+            # ("metacognitive_self_estimation", Shortcut.FORMAT_KEYWORD_TRIGGER): self._meta_rename_deviation_token,
+            ("metacognitive_self_estimation", Shortcut.COPY_BIAS): self._meta_add_noisy_illustration,
         }.get(key)
 
     # -------------------------
@@ -781,18 +782,48 @@ class CounterfactualTransformer:
         it["prompt"] = it["prompt"].replace("deviation_d", "delta_d")
         it["meta"]["cf_edit"] = "renamed_deviation_token"
         return it
+    
+    def _meta_add_noisy_illustration(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
+        """
+        Disputes anchoring / boundary discipline:
+        Insert a misleading HINT line between the final Q and A.
+        """
+        prompt = it["prompt"]
+
+        # Match the final metacognitive question block:
+        # group(1): the Q line (with trailing newline)
+        # group(2): the A: line
+        m = re.search(
+            r"(Q:\s*How many were correct\?\s*\n)(A:)",
+            prompt
+        )
+        if not m:
+            return it
+
+        hint = "HINT: 11\n"
+
+        # Reconstruct prompt with hint inserted between Q and A
+        it["prompt"] = (
+            prompt[: m.start(2)] +
+            hint +
+            prompt[m.start(2):]
+        )
+
+        it["meta"]["cf_edit"] = "added_noisy_hint_between_q_and_a"
+        return it
+
 
 # -------------------------
 # Dataset generation
 # -------------------------
 
-def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/dataset.json"):
+def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/dataset.json", seed: int = 42):
     from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
     rng = random.Random(0)
 
     # 1) Build a dataset using your existing BenchmarkBuilder
     spec = BenchmarkSpec(
-        seed=42,        # Put as arg
+        seed=seed,        # Put as arg
         n_per_skill={
             "relational_reasoning": n_samples_per_skill,
             "rule_induction": n_samples_per_skill,
@@ -805,7 +836,7 @@ def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/
             "phonological_awareness": n_samples_per_skill,
             "instruction_comprehension": n_samples_per_skill,
             "fine_motor_proxy": n_samples_per_skill,
-            "social_emotional_awareness": n_samples_per_skill,
+            # "social_emotional_awareness": n_samples_per_skill,
             "metacognitive_self_estimation": n_samples_per_skill,
         },
         shuffle=False,
@@ -888,7 +919,7 @@ if __name__ == "__main__":
             "phonological_awareness": 1,
             "instruction_comprehension": 1,
             "fine_motor_proxy": 1,
-            "social_emotional_awareness": 1,
+            # "social_emotional_awareness": 1,
             "metacognitive_self_estimation": 1,
         },
         shuffle=False,
