@@ -4,12 +4,13 @@ import gc
 import logging
 import os
 import random
+import shutil
 import re
 from collections import defaultdict
 from typing import List, Dict, Any
 
 import torch
-from huggingface_hub import list_repo_refs, scan_cache_dir
+from huggingface_hub import list_repo_refs
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # --- Import your internal libraries ---
@@ -67,24 +68,6 @@ def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
     sorted_branches = sorted(branches, key=lambda x: x["step"])
     logger.warning(f"Identified {len(sorted_branches)} target branches.")
     return sorted_branches
-
-
-def cleanup_cache(repo_id: str, revision: str):
-    """Deletes specific revision from HF cache."""
-    logger.warning(f"Attempting to clean cache for revision: {revision}")
-    try:
-        info = scan_cache_dir()
-        repo = next((r for r in info.repos if r.repo_id == repo_id), None)
-        if repo:
-            for rev in repo.revisions:
-                if revision in rev.refs:
-                    rev.delete_strategy.execute()
-                    logger.warning(f"Successfully deleted cache for {revision}")
-                    return
-        logger.warning(f"Revision {revision} not found in cache during cleanup.")
-    except (OSError, ValueError) as e:
-        logger.error(f"Cache cleanup failed: {e}")
-
 
 def get_processed_steps(csv_path: str) -> set:
     """Returns set of steps already present in the metrics CSV."""
@@ -285,18 +268,24 @@ def main():
         model = None
         tokenizer = None
 
+        # Define a temporary cache directory for this specific step
+        # This isolates the download so we can safely delete it later.
+        step_cache_dir = os.path.abspath(f"./tmp_cache_step_{step}")
+
         try:
             logger.warning(f"Loading model {branch_name}...")
-            tokenizer = AutoTokenizer.from_pretrained(REPO_ID, revision=branch_name, trust_remote_code=True)
+            tokenizer = AutoTokenizer.from_pretrained(REPO_ID, revision=branch_name,
+                                                      trust_remote_code=True, cache_dir=step_cache_dir)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
             model = AutoModelForCausalLM.from_pretrained(
-                    REPO_ID,
-                    revision=branch_name,
-                    trust_remote_code=True,
-                    device_map="auto",
-                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+                REPO_ID,
+                revision=branch_name,
+                trust_remote_code=True,
+                device_map="auto",
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                cache_dir=step_cache_dir  # <--- ISOLATED CACHE
             )
             model.eval()
 
@@ -317,9 +306,12 @@ def main():
             gc.collect()
             if torch.cuda.is_available(): torch.cuda.empty_cache()
 
-            if CLEAN_CACHE:
-                cleanup_cache(REPO_ID, branch_name)
-
+            # 2. Nuclear Cache Cleanup: Delete the entire temp folder
+            if not os.path.exists(step_cache_dir):
+                logger.error("Cache dir %s does not exist", step_cache_dir)
+            if CLEAN_CACHE and os.path.exists(step_cache_dir):
+                logger.info(f"Deleting temporary cache directory: {step_cache_dir}")
+                shutil.rmtree(step_cache_dir, ignore_errors=True)
 
 if __name__ == "__main__":
     main()
