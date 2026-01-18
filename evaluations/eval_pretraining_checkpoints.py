@@ -65,7 +65,7 @@ def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
             if step % interval == 0:
                 branches.append({"step": step, "name": b.name})
 
-    sorted_branches = sorted(branches, key=lambda x: x["step"])
+    sorted_branches = sorted(branches, key=lambda x: x["step"], reverse=True)
     logger.warning(f"Identified {len(sorted_branches)} target branches.")
     return sorted_branches
 
