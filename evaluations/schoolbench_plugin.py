@@ -8,15 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import torch
-import torch.nn.functional as F
-from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
-
 # SWIFT pluginization: register extra callbacks and load via --external_plugins
 from swift.plugin.callback import extra_callbacks
+from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
+from evaluations.counterfactual_transform import CounterfactualTransformer
 from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
-from evaluations.counterfactual_transform import CounterfactualTransformer, Shortcut
+from evaluations.scoring import score_one
 
 logger = logging.getLogger()
 
@@ -68,72 +66,6 @@ def _finalize(agg: _Agg) -> Dict[str, float]:
     for k, (h, t) in agg.topk.items():
         out[f"top{k}_acc"] = float(h / max(t, 1))
     return out
-
-
-def _maybe_strip_one_space(s: str) -> str:
-    return s[1:] if s.startswith(" ") else s
-
-
-@torch.inference_mode()
-def _score_one(
-    model,
-    tokenizer,
-    prompt: str,
-    gold: str,
-    topk_list: List[int],
-    device: torch.device,
-) -> Tuple[float, int, Dict[int, Tuple[int, int]]]:
-    """
-    Gold-conditioned scoring:
-      - input = prompt + " " + gold
-      - labels masked on prompt tokens
-      - NLL + top-k computed only on gold tokens
-    """
-    gold = _maybe_strip_one_space(gold)
-    full = prompt + " " + gold
-
-    enc_prompt = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
-    enc_full = tokenizer(full, return_tensors="pt", add_special_tokens=False)
-
-    input_ids = enc_full["input_ids"].to(device)
-    attn_mask = enc_full.get("attention_mask", torch.ones_like(input_ids)).to(device)
-
-    prompt_len = enc_prompt["input_ids"].shape[1]
-    T = input_ids.shape[1]
-    if T <= prompt_len:
-        return 0.0, 0, {k: (0, 0) for k in topk_list}
-
-    labels = input_ids.clone()
-    labels[:, :prompt_len] = -100
-    labels[:, prompt_len+1:] = -100
-
-    outputs = model(input_ids=input_ids, attention_mask=attn_mask)
-    logits = outputs.logits  # [1,T,V]
-
-    shift_logits = logits[:, :-1, :]
-    shift_labels = labels[:, 1:]
-
-    loss = F.cross_entropy(
-        shift_logits.reshape(-1, shift_logits.size(-1)),
-        shift_labels.reshape(-1),
-        ignore_index=-100,
-        reduction="none",
-    ).view(shift_labels.size())
-
-    mask = (shift_labels != -100)
-    nll_sum = float((loss * mask).sum().item())
-    tok = int(mask.sum().item())
-
-    topk_hits: Dict[int, Tuple[int, int]] = {}
-    for k in topk_list:
-        if tok == 0:
-            topk_hits[k] = (0, 0)
-            continue
-        topk = torch.topk(shift_logits, k=k, dim=-1).indices  # [1,T-1,k]
-        hits = ((topk == shift_labels.unsqueeze(-1)) & mask.unsqueeze(-1)).any(dim=-1).sum().item()
-        topk_hits[k] = (int(hits), tok)
-
-    return nll_sum, tok, topk_hits
 
 
 def _add(aggs: Dict[str, _Agg], key: str, nll_sum: float, tok: int, topk_hits: Dict[int, Tuple[int, int]]):
@@ -331,7 +263,7 @@ class SchoolBenchEvalCallback(TrainerCallback):
 
         def score_and_add(group_prefix: str, items: List[Dict[str, Any]]):
             for it in items:
-                nll, tok, topk_hits = _score_one(
+                nll, tok, topk_hits = score_one(
                     model=model,
                     tokenizer=tokenizer,
                     prompt=it["prompt"],
