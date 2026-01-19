@@ -20,7 +20,13 @@ def check_response(response: str, expected: str) -> dict:
     return matches
 
 
-def main(model_name: str, temperature: float = 0.6, input_path: str = "data/dataset.json", output_path: str = "data/results.json", trust_remote_code: bool = False):
+def main(model_name: str, 
+         temperature: float = 0.6, 
+         input_path: str = "data/dataset.json", 
+         output_path: str = "data/results.json", 
+         trust_remote_code: bool = False,
+         max_model_len: int = 4096,
+         max_tokens: int = 128):
     
     # Check if GPUs are properly exposed
     print(f"CUDA available: {torch.cuda.is_available()}")
@@ -41,7 +47,7 @@ def main(model_name: str, temperature: float = 0.6, input_path: str = "data/data
     llm = LLM(
         model=model_name,
         tensor_parallel_size=num_gpus,
-        max_model_len=4096,
+        max_model_len=max_model_len,
         trust_remote_code=trust_remote_code
     )
 
@@ -50,7 +56,7 @@ def main(model_name: str, temperature: float = 0.6, input_path: str = "data/data
     # Sampling parameters for generation
     sampling_params = SamplingParams(
         temperature=temperature,
-        max_tokens=128,
+        max_tokens=max_tokens,
         stop=["\n"]     # Weird quirk: if we remove this, the LLM will generate new questions
     )
 
@@ -114,6 +120,8 @@ if __name__ == "__main__":
     parser.add_argument("--input_path", help="Path to the input dataset")
     parser.add_argument("--output_path", help="Path to output dataset")
     parser.add_argument("--trust_remote_code", action="store_true", help="Trust remote code (required for some models)")
+    parser.add_argument("--max_model_len", type=int, default=4096, help="Maximum context window")
+    parser.add_argument("--max_tokens",type=int, default=128, help="Maximum number of tokens in prompt + output")
     
     args = parser.parse_args()
 
@@ -122,5 +130,7 @@ if __name__ == "__main__":
         args.temperature,
         args.input_path,
         args.output_path,
-        args.trust_remote_code
+        args.trust_remote_code,
+        args.max_model_len,
+        args.max_tokens
     )
