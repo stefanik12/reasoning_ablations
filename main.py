@@ -113,7 +113,7 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--temperature", type=float, default=0.6, help="Model temperature")
     parser.add_argument("--input_path", help="Path to the input dataset")
     parser.add_argument("--output_path", help="Path to output dataset")
-    parser.add_argument("--trust_remote_code", default=False, help="Trust remote code (required for some models)")
+    parser.add_argument("--trust_remote_code", action="store_true", help="Trust remote code (required for some models)")
     
     args = parser.parse_args()
 
