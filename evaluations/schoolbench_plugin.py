@@ -105,6 +105,7 @@ def _score_one(
 
     labels = input_ids.clone()
     labels[:, :prompt_len] = -100
+    labels[:, prompt_len+1:] = -100
 
     outputs = model(input_ids=input_ids, attention_mask=attn_mask)
     logits = outputs.logits  # [1,T,V]
@@ -288,6 +289,10 @@ class SchoolBenchEvalCallback(TrainerCallback):
                 model = tr.model
             if self._tokenizer is None and getattr(tr, "tokenizer", None) is not None:
                 tokenizer = tr.tokenizer
+        if tokenizer is None and "tokenizer" in kwargs:
+            tokenizer = kwargs["tokenizer"]
+        if model is None and "model" in kwargs:
+            model = kwargs["model"]
 
         if model is None or tokenizer is None:
             # If this happens in your setup, we can instead re-load tokenizer/model here,
