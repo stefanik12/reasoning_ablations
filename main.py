@@ -20,7 +20,7 @@ def check_response(response: str, expected: str) -> dict:
     return matches
 
 
-def main(model_name: str, temperature: float = 0.6, input_path: str = "data/dataset.json", output_path: str = "data/results.json"):
+def main(model_name: str, temperature: float = 0.6, input_path: str = "data/dataset.json", output_path: str = "data/results.json", trust_remote_code: bool = False):
     
     # Check if GPUs are properly exposed
     print(f"CUDA available: {torch.cuda.is_available()}")
@@ -42,6 +42,7 @@ def main(model_name: str, temperature: float = 0.6, input_path: str = "data/data
         model=model_name,
         tensor_parallel_size=num_gpus,
         max_model_len=4096,
+        trust_remote_code=trust_remote_code
     )
 
     print("Model loaded successfully!")
@@ -112,6 +113,7 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--temperature", type=float, default=0.6, help="Model temperature")
     parser.add_argument("--input_path", help="Path to the input dataset")
     parser.add_argument("--output_path", help="Path to output dataset")
+    parser.add_argument("--trust_remote_code", default=False, help="Trust remote code (required for some models)")
     
     args = parser.parse_args()
 
@@ -119,5 +121,6 @@ if __name__ == "__main__":
         args.model_name,
         args.temperature,
         args.input_path,
-        args.output_path
+        args.output_path,
+        args.trust_remote_code
     )
