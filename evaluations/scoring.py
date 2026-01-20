@@ -1,10 +1,44 @@
 # plugins/schoolbench_plugin.py
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+import math
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Any
 
 import torch
 import torch.nn.functional as F
+
+
+@dataclass
+class _Agg:
+    nll: float = 0.0
+    n_tokens: int = 0
+    topk: Dict[int, Tuple[int, int]] = None
+
+    def __post_init__(self):
+        if self.topk is None:
+            self.topk = {}
+
+def agg_new(topk_list: List[int]) -> _Agg:
+    return _Agg(nll=0.0, n_tokens=0, topk={k: (0, 0) for k in topk_list})
+
+def agg_add(agg: _Agg, out: Dict[str, Any], topk_list: List[int]) -> None:
+    agg.nll += float(out.get("nll", 0.0))
+    agg.n_tokens += int(out.get("n_tokens", 0))
+    for k in topk_list:
+        h = int(out.get(f"top{k}_hits", 0))
+        t = int(out.get(f"top{k}_total", 0))
+        hh, tt = agg.topk.get(k, (0, 0))
+        agg.topk[k] = (hh + h, tt + t)
+
+def agg_finalize(agg: _Agg, prefix: str, topk_list: List[int]) -> Dict[str, float]:
+    tok = max(agg.n_tokens, 1)
+    out: Dict[str, float] = {f"{prefix}_ppl": float(math.exp(agg.nll / tok)),
+                             f"{prefix}_n_tokens": float(agg.n_tokens)}
+    for k in topk_list:
+        h, t = agg.topk.get(k, (0, 0))
+        out[f"{prefix}_top{k}_acc"] = float(h / max(t, 1))
+    return out
 
 
 @torch.inference_mode()
@@ -15,12 +49,12 @@ def score_one(
     gold: str,
     topk_list: List[int],
     device: torch.device,
-) -> Tuple[float, int, Dict[int, Tuple[int, int]]]:
+) -> Dict[str, Any]:
     """
     Gold-conditioned scoring:
       - input = prompt + " " + gold
       - labels masked on prompt tokens
-      - NLL + top-k computed only on gold tokens
+      - NLL + top-k computed on ALL gold tokens
     """
     full = prompt.strip() + " " + gold.strip()
 
@@ -33,14 +67,20 @@ def score_one(
     prompt_len = enc_prompt["input_ids"].shape[1]
     T = input_ids.shape[1]
     if T <= prompt_len:
-        return 0.0, 0, {k: (0, 0) for k in topk_list}
+        out: Dict[str, Any] = {"nll": 0.0, "n_tokens": 0,
+                               "expected": gold.strip(), "most_likely": "", "topn": {}}
+        for k in topk_list:
+            out[f"top{k}_hits"] = 0
+            out[f"top{k}_total"] = 0
+        return out
 
     labels = input_ids.clone()
     labels[:, :prompt_len] = -100
-    labels[:, prompt_len+1:] = -100
+    # labels[:, prompt_len+1:] = -100  # aggregating over all label tokens
 
-    outputs = model(input_ids=input_ids, attention_mask=attn_mask)
-    logits = outputs.logits  # [1,T,V]
+    # Use Autocast for compatibility with Apertus/Olmo layers (xIELU etc)
+    with torch.autocast(device_type="cuda", dtype=torch.float16):
+        logits = model(input_ids=input_ids, attention_mask=attn_mask).logits
 
     shift_logits = logits[:, :-1, :]
     shift_labels = labels[:, 1:]
@@ -53,16 +93,43 @@ def score_one(
     ).view(shift_labels.size())
 
     mask = (shift_labels != -100)
-    nll_sum = float((loss * mask).sum().item())
-    tok = int(mask.sum().item())
+    nll = float((loss * mask).sum().item())
+    n_tokens = int(mask.sum().item())
 
-    topk_hits: Dict[int, Tuple[int, int]] = {}
+    pos = mask.nonzero(as_tuple=False)
+    if pos.numel() == 0:
+        out: Dict[str, Any] = {"nll": 0.0, "n_tokens": 0,
+                               "expected": gold.strip(), "most_likely": "", "topn": {}}
+        for k in topk_list:
+            out[f"top{k}_hits"] = 0
+            out[f"top{k}_total"] = 0
+        return out
+
+    idx = mask[0].nonzero(as_tuple=False).squeeze(-1)  # positions in shift space
+
+    # Most-likely sequence across ALL scored (gold) positions
+    ml_ids = shift_logits[0, idx].argmax(dim=-1).tolist()
+    most_likely_seq = tokenizer.convert_tokens_to_string([tokenizer.convert_ids_to_tokens(i) for i in ml_ids]).strip()
+
+    topn: Dict[int, List[List[str]]] = {}
+    out: Dict[str, Any] = {"nll": nll, "n_tokens": n_tokens,
+                           "expected": gold.strip(), "most_likely": most_likely_seq, "topn": topn}
+
     for k in topk_list:
-        if tok == 0:
-            topk_hits[k] = (0, 0)
+        if n_tokens == 0:
+            out[f"top{k}_hits"] = 0
+            out[f"top{k}_total"] = 0
+            topn[k] = []
             continue
-        topk = torch.topk(shift_logits, k=k, dim=-1).indices  # [1,T-1,k]
-        hits = ((topk == shift_labels.unsqueeze(-1)) & mask.unsqueeze(-1)).any(dim=-1).sum().item()
-        topk_hits[k] = (int(hits), tok)
 
-    return nll_sum, tok, topk_hits
+        topk_ids = torch.topk(shift_logits, k=k, dim=-1).indices  # [1,T-1,k]
+        hits = ((topk_ids == shift_labels.unsqueeze(-1)) & mask.unsqueeze(-1)).any(dim=-1).sum().item()
+
+        out[f"top{k}_hits"] = int(hits)
+        out[f"top{k}_total"] = int(n_tokens)
+
+        # Aggregate top-n across ALL scored (gold) positions: shape [n_tokens, k]
+        ids = torch.topk(shift_logits[0, idx], k=k, dim=-1).indices.tolist()
+        topn[k] = [[tokenizer.convert_ids_to_tokens(i) for i in row] for row in ids]
+
+    return out

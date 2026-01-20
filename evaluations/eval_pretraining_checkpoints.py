@@ -4,8 +4,8 @@ import gc
 import logging
 import os
 import random
-import shutil
 import re
+import shutil
 from collections import defaultdict
 from typing import List, Dict, Any
 
@@ -16,6 +16,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # --- Import your internal libraries ---
 from evaluations.counterfactual_transform import CounterfactualTransformer
 from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
+from evaluations.scoring import score_one, agg_add, agg_new, agg_finalize
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,12 @@ logger = logging.getLogger(__name__)
 # REPO_ID = "swiss-ai/Apertus-8B-2509"
 
 parser = argparse.ArgumentParser(description="Run SchoolBench evaluation on model checkpoints.")
-parser.add_argument("repo_id", type=str, help="Target HuggingFace repository ID (e.g., 'swiss-ai/Apertus-70B-2509')")
+parser.add_argument("--repo_id", type=str, help="Target HuggingFace repository ID (e.g., 'swiss-ai/Apertus-70B-2509')")
+parser.add_argument("--topk", type=str, default="1,10,100", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
 args = parser.parse_args()
 
-# --- Configuration ---
-REPO_ID = args.repo_id  # Dynamic value from CLI
+REPO_ID = args.repo_id
+TOPK_LIST = sorted({int(x) for x in args.topk.split(",") if x.strip()}) if args.topk else []
 
 STEP_INTERVAL = 10000
 METRICS_CSV = "schoolbench_%s_metrics.csv" % REPO_ID.split("/")[-1]
@@ -40,278 +42,189 @@ CLEAN_CACHE = True
 SCHOOLBENCH_CONFIG = {
     "seed": 42,
     "cf_seed": 123,
-    "n_per_skill": 1000,  # Items per skill
+    "n_per_skill": 2,  # Items per skill
     "shuffle": False,
     "max_new_tokens": 10
 }
 
 
 def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
-    """Returns sorted list of branches matching step intervals."""
-    logger.warning(f"Fetching branches from {repo_id}...")
     try:
         refs = list_repo_refs(repo_id)
-    except (OSError, ValueError) as e:
-        logger.error(f"Error listing refs: {e}")
+    except Exception as e:
+        logger.error("Error listing refs: %s", e)
         return []
 
-    branches = []
-    pattern = re.compile(r"^step(\d+)(?:.*)?$")
-
+    out = []
+    pat = re.compile(r"^step(\d+)")
     for b in refs.branches:
-        match = pattern.match(b.name)
-        if match:
-            step = int(match.group(1))
-            if step % interval == 0:
-                branches.append({"step": step, "name": b.name})
+        m = pat.match(b.name)
+        if m and int(m.group(1)) % interval == 0:
+            out.append({"step": int(m.group(1)), "name": b.name})
 
-    sorted_branches = sorted(branches, key=lambda x: x["step"], reverse=True)
-    logger.warning(f"Identified {len(sorted_branches)} target branches.")
-    return sorted_branches
+    return [{"step": 0, "name": "main"}]
+
 
 def get_processed_steps(csv_path: str) -> set:
-    """Returns set of steps already present in the metrics CSV."""
-    steps = set()
-    if os.path.exists(csv_path):
-        try:
-            with open(csv_path, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    if row.get("step"):
-                        steps.add(int(row["step"]))
-        except (csv.Error, ValueError, OSError) as e:
-            logger.warning(f"Could not read existing CSV {csv_path}: {e}")
-    return steps
+    if not os.path.exists(csv_path):
+        return set()
+    with open(csv_path, "r", encoding="utf-8") as f:
+        return {int(r["step"]) for r in csv.DictReader(f) if r.get("step")}
 
 
 def prepare_data() -> List[Dict[str, Any]]:
-    """Generates the Paired (Base + CF) dataset."""
-    logger.warning("Generating evaluation dataset...")
-
-    # Handle n_per_skill configuration
     n_cfg = SCHOOLBENCH_CONFIG["n_per_skill"]
     if isinstance(n_cfg, int):
-        dummy_spec = BenchmarkSpec(n_per_skill={})
-        dummy_builder = BenchmarkBuilder(dummy_spec)
-        n_per_skill_arg = {s.name: n_cfg for s in dummy_builder.skills}
-    else:
-        n_per_skill_arg = n_cfg
+        dummy = BenchmarkBuilder(BenchmarkSpec(n_per_skill={})).skills
+        n_cfg = {s.name: SCHOOLBENCH_CONFIG["n_per_skill"] for s in dummy}
 
-    spec = BenchmarkSpec(
-            seed=SCHOOLBENCH_CONFIG["seed"],
-            n_per_skill=n_per_skill_arg,
-            shuffle=SCHOOLBENCH_CONFIG["shuffle"]
-    )
+    spec = BenchmarkSpec(seed=SCHOOLBENCH_CONFIG["seed"], n_per_skill=n_cfg,
+                         shuffle=SCHOOLBENCH_CONFIG["shuffle"])
     base_items = BenchmarkBuilder(spec).generate()
 
-    # Apply Counterfactual Transforms
     tfm = CounterfactualTransformer()
     rng = random.Random(SCHOOLBENCH_CONFIG["cf_seed"])
 
     pairs = []
-    for item in base_items:
-        shortcuts = tfm.applicable_shortcuts(item)
-        cf_item = None
-        if shortcuts:
-            chosen = rng.choice(shortcuts)
-            cf_item = tfm.transform(item, shortcut=chosen, rng=rng)
-
-        pairs.append({"base": item, "cf": cf_item})
-
-    logger.warning(f"Dataset ready: {len(pairs)} items generated.")
+    for it in base_items:
+        cfs = tfm.applicable_shortcuts(it)
+        cf = tfm.transform(it, rng.choice(cfs), rng) if cfs else None
+        pairs.append({"base": it, "cf": cf})
     return pairs
 
 
 def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
-    """Runs generation and scoring for a single checkpoint."""
-    # Global Counters
-    correct_base = 0
-    correct_cf = 0
-    count_cf = 0
+    device = next(model.parameters()).device
 
-    # Per-Skill Counters
-    skill_stats = defaultdict(lambda: {"base_correct": 0, "base_total": 0, "cf_correct": 0, "cf_total": 0})
+    base_agg, cf_agg = agg_new(TOPK_LIST), agg_new(TOPK_LIST)
+    base_ex = cf_ex = 0
 
-    logger.warning(f"Starting evaluation for {model_id}...")
+    skills = defaultdict(lambda: {
+        "base": agg_new(TOPK_LIST), "cf": agg_new(TOPK_LIST),
+        "base_ex": 0, "cf_ex": 0
+    })
 
-    # We open the file here to stream results row-by-row
+    writer = None
     file_exists = os.path.exists(SAMPLES_CSV)
-    with open(SAMPLES_CSV, "a", newline="", encoding="utf-8") as f_samp:
-        fieldnames = ["model_id", "skill", "prompt", "prediction", "cf_prompt", "cf_prediction"]
-        writer = csv.DictWriter(f_samp, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
 
-        for i, p in enumerate(pairs):
-            if i > 0 and i % 50 == 0:
-                logger.debug(f"Processed {i}/{len(pairs)} samples...")
+    with open(SAMPLES_CSV, "a", newline="", encoding="utf-8") as f:
 
-            base = p["base"]
-            cf = p["cf"]
+        def write(kind, skill, prompt, gold):
+            nonlocal writer
+            out = score_one(model, tokenizer, prompt, gold, TOPK_LIST, device)
+            if writer is None:
+                fields = ["model_id", "step", "branch", "skill", "kind", "prompt", "gold", *out.keys()]
+                writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+                if not file_exists:
+                    writer.writeheader()
+            row = {"model_id": model_id, "step": step_num, "branch": model_id, "skill": skill, "kind": kind,
+                   "prompt": prompt, "gold": gold, **out}
+            writer.writerow(row)
+            return out
+
+        def acc(kind, skill, prompt, gold):
+            nonlocal base_ex, cf_ex
+            out = write(kind, skill, prompt, gold)
+            if kind == "base":
+                agg_add(base_agg, out, TOPK_LIST); base_ex += 1
+                agg_add(skills[skill]["base"], out, TOPK_LIST); skills[skill]["base_ex"] += 1
+            else:
+                agg_add(cf_agg, out, TOPK_LIST); cf_ex += 1
+                agg_add(skills[skill]["cf"], out, TOPK_LIST); skills[skill]["cf_ex"] += 1
+
+        for p in pairs:
+            base, cf = p["base"], p["cf"]
             skill = base.get("skill", "unknown")
 
-            # Update Totals
-            skill_stats[skill]["base_total"] += 1
-            if cf:
-                skill_stats[skill]["cf_total"] += 1
-
-            # --- Generation (UNIVERSAL FIX) ---
-            def generate(prompt):
-                # 1. Tokenize
-                raw_inputs = tokenizer(prompt, return_tensors="pt")
-
-                # 2. Filter & Move to Device (Exclude token_type_ids for OLMo)
-                model_inputs = {
-                    k: v.to(model.device) for k, v in raw_inputs.items()
-                    if k != "token_type_ids"
-                }
-
-                # 3. Generate
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    with torch.no_grad():
-                        out = model.generate(
-                                **model_inputs,
-                                max_new_tokens=SCHOOLBENCH_CONFIG["max_new_tokens"],
-                                do_sample=False,
-                                pad_token_id=tokenizer.pad_token_id,
-                                use_cache=False
-                        )
-
-                # 4. Decode
-                input_len = model_inputs["input_ids"].shape[1]
-                return tokenizer.decode(out[0][input_len:], skip_special_tokens=True).strip()
-
-            base_pred = generate(base["prompt"])
-            cf_pred = generate(cf["prompt"]) if cf else ""
-
-            # --- Scoring ---
-            base_gold = base.get("gold", base.get("completion", "")).strip()
-            base_hit = (base_gold and base_pred == base_gold)
-            if base_hit:
-                correct_base += 1
-                skill_stats[skill]["base_correct"] += 1
+            bg = base.get("gold", base.get("completion", "")).strip()
+            if bg:
+                acc("base", skill, base["prompt"], bg)
 
             if cf:
-                count_cf += 1
-                cf_gold = cf.get("gold", cf.get("completion", "")).strip()
-                cf_hit = (cf_gold and cf_pred == cf_gold)
-                if cf_hit:
-                    correct_cf += 1
-                    skill_stats[skill]["cf_correct"] += 1
+                cg = cf.get("gold", cf.get("completion", "")).strip()
+                if cg:
+                    acc("cf", skill, cf["prompt"], cg)
 
-            # --- Logging ---
-            row = {
-                "model_id": model_id,
-                "skill": skill,
-                "prompt": base["prompt"],
-                "prediction": base_pred,
-                "cf_prompt": cf["prompt"] if cf else "",
-                "cf_prediction": cf_pred
-            }
-            # Only write to CSV, do not print to stdout
-            writer.writerow(row)
+    metrics = {"step": step_num, "branch": model_id, "n_samples": len(pairs),
+               "base_n_examples": float(base_ex), "cf_n_examples": float(cf_ex)}
+    metrics.update(agg_finalize(base_agg, "base", TOPK_LIST))
+    metrics.update(agg_finalize(cf_agg, "cf", TOPK_LIST))
 
-    logger.warning(f"Finished evaluation for {model_id}.")
+    for skill, s in skills.items():
+        metrics[f"skill.{skill}.base_n_examples"] = float(s["base_ex"])
+        metrics[f"skill.{skill}.cf_n_examples"] = float(s["cf_ex"])
 
-    # --- Metrics ---
-    metrics = {
-        "step": step_num,
-        "branch": model_id,
-        "base_acc": correct_base / len(pairs) if pairs else 0,
-        "cf_acc": correct_cf / count_cf if count_cf else 0,
-        "n_samples": len(pairs)
-    }
+        bm = agg_finalize(s["base"], f"skill.{skill}.base", TOPK_LIST)
+        cm = agg_finalize(s["cf"], f"skill.{skill}.cf", TOPK_LIST)
+        metrics.update(bm)
+        metrics.update(cm)
 
-    # Per-Skill Metrics
-    for skill, stats in skill_stats.items():
-        b_acc = stats["base_correct"] / stats["base_total"] if stats["base_total"] > 0 else 0.0
-        c_acc = stats["cf_correct"] / stats["cf_total"] if stats["cf_total"] > 0 else 0.0
-
-        metrics[f"skill.{skill}.base_acc"] = b_acc
-        metrics[f"skill.{skill}.cf_acc"] = c_acc
-
-        if stats["cf_total"] > 0:
-            metrics[f"skill.{skill}.gap"] = b_acc - c_acc
-        else:
-            metrics[f"skill.{skill}.gap"] = 0.0
+        metrics[f"skill.{skill}.gap"] = (
+            metrics.get(f"skill.{skill}.cf_ppl", 0.0) - metrics.get(f"skill.{skill}.base_ppl", 0.0)
+            if s["cf_ex"] else 0.0
+        )
 
     return metrics
 
 
 def main():
     branches = get_target_branches(REPO_ID, STEP_INTERVAL)
-    completed_steps = get_processed_steps(METRICS_CSV)
-    logger.warning(f"Found {len(branches)} total checkpoints. {len(completed_steps)} already completed.")
+    completed = get_processed_steps(METRICS_CSV)
+    data = prepare_data()
 
-    eval_data = prepare_data()
-
-    # Pre-calculate CSV Headers for Metrics file
-    all_skills = sorted(list(set(item["base"].get("skill", "unknown") for item in eval_data)))
-    metrics_fieldnames = ["step", "branch", "base_acc", "cf_acc", "n_samples"]
-    for skill in all_skills:
-        metrics_fieldnames.append(f"skill.{skill}.base_acc")
-        metrics_fieldnames.append(f"skill.{skill}.cf_acc")
-        metrics_fieldnames.append(f"skill.{skill}.gap")
-
-    logger.warning(f"CSV Headers will include metrics for skills: {all_skills}")
+    all_skills = sorted({p["base"].get("skill", "unknown") for p in data})
+    fields = [
+        "step", "branch",
+        "base_ppl", "base_n_tokens", "base_n_examples",
+        "cf_ppl", "cf_n_tokens", "cf_n_examples",
+        "n_samples",
+    ]
+    for k in TOPK_LIST:
+        fields += [f"base_top{k}_acc", f"cf_top{k}_acc"]
+    for s in all_skills:
+        fields += [
+            f"skill.{s}.base_ppl", f"skill.{s}.base_n_tokens", f"skill.{s}.base_n_examples",
+            f"skill.{s}.cf_ppl", f"skill.{s}.cf_n_tokens", f"skill.{s}.cf_n_examples",
+        ]
+        for k in TOPK_LIST:
+            fields += [f"skill.{s}.base_top{k}_acc", f"skill.{s}.cf_top{k}_acc"]
+        fields.append(f"skill.{s}.gap")
 
     for b in branches:
-        step = b["step"]
-        branch_name = b["name"]
-
-        if step in completed_steps:
-            logger.warning(f"Skipping step {step} (already in {METRICS_CSV})")
+        if b["step"] in completed:
             continue
 
-        logger.warning(f"Processing Step {step} ({branch_name})")
-
-        model = None
-        tokenizer = None
-
-        # Define a temporary cache directory for this specific step
-        # This isolates the download so we can safely delete it later.
-        step_cache_dir = os.path.abspath(f"./tmp_cache_step_{step}")
-
+        step_cache = os.path.abspath(f"./tmp_cache_step_{b['step']}")
         try:
-            logger.warning(f"Loading model {branch_name}...")
-            tokenizer = AutoTokenizer.from_pretrained(REPO_ID, revision=branch_name,
-                                                      trust_remote_code=True, cache_dir=step_cache_dir)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
+            tok = AutoTokenizer.from_pretrained(REPO_ID, revision=b["name"],
+                                                trust_remote_code=True, cache_dir=step_cache)
+            if tok.pad_token is None:
+                tok.pad_token = tok.eos_token
 
             model = AutoModelForCausalLM.from_pretrained(
-                REPO_ID,
-                revision=branch_name,
-                trust_remote_code=True,
+                REPO_ID, revision=b["name"], trust_remote_code=True,
                 device_map="auto",
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                cache_dir=step_cache_dir  # <--- ISOLATED CACHE
-            )
-            model.eval()
+                cache_dir=step_cache
+            ).eval()
 
-            metrics = evaluate_checkpoint(model, tokenizer, eval_data, step, branch_name)
+            m = evaluate_checkpoint(model, tok, data, b["step"], b["name"])
 
-            file_exists = os.path.exists(METRICS_CSV)
+            write_header = not os.path.exists(METRICS_CSV)
             with open(METRICS_CSV, "a", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=metrics_fieldnames, extrasaction='ignore')
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerow(metrics)
-
-            logger.warning(f"Saved aggregated metrics to {METRICS_CSV}")
+                w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+                if write_header:
+                    w.writeheader()
+                w.writerow(m)
 
         finally:
-            if model is not None: del model
-            if tokenizer is not None: del tokenizer
+            del model, tok
             gc.collect()
-            if torch.cuda.is_available(): torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            if CLEAN_CACHE:
+                shutil.rmtree(step_cache, ignore_errors=True)
 
-            # 2. Nuclear Cache Cleanup: Delete the entire temp folder
-            if not os.path.exists(step_cache_dir):
-                logger.error("Cache dir %s does not exist", step_cache_dir)
-            if CLEAN_CACHE and os.path.exists(step_cache_dir):
-                logger.info(f"Deleting temporary cache directory: {step_cache_dir}")
-                shutil.rmtree(step_cache_dir, ignore_errors=True)
 
 if __name__ == "__main__":
     main()
