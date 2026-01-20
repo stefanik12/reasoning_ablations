@@ -16,10 +16,10 @@ parser.add_argument("--step_interval", type=int, default=1000, help="Steps betwe
 parser.add_argument("--tasks", type=str, default="mmlu", help="Comma-separated list of tasks")
 parser.add_argument("--batch_size", type=str, default="auto", help="Batch size for eval")
 parser.add_argument("--device", type=str, default="cuda:0", help="Device to run on")
-parser.add_argument("--output_file", type=str, default="mmlu_results.csv", help="Output CSV file")
 args = parser.parse_args()
 
 CLEAN_CACHE = True
+RESULTS_CSV = "lmeval_%s.csv" % args.repo_id.split("/")[-1]
 
 
 def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
@@ -55,22 +55,22 @@ def get_processed_steps(csv_path: str) -> set:
 
 def main():
     branches = get_target_branches(args.repo_id, args.step_interval)
-    processed = get_processed_steps(args.output_file)
+    processed = get_processed_steps(RESULTS_CSV)
     task_list = args.tasks.split(",")
 
     # Initialize CSV header if file doesn't exist
-    if not os.path.exists(args.output_file):
-        with open(args.output_file, "w", newline="", encoding="utf-8") as f:
+    if not os.path.exists(RESULTS_CSV):
+        with open(RESULTS_CSV, "w", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(["step", "branch", "average_acc"] + [f"{t}_acc" for t in task_list])
 
     for b in branches:
         step, branch_name = b["step"], b["name"]
         if step in processed:
-            logger.info(f"Skipping step {step} (already processed)");
+            logger.warning(f"Skipping step {step} (already processed)");
             continue
 
         # Create a temporary cache directory for this specific step to ensure isolation
-        logger.info(f"Evaluating Step {step} ({branch_name})")
+        logger.warning(f"Evaluating Step {step} ({branch_name})")
         step_cache = os.path.abspath(f"./tmp_cache_step_{step}")
         os.makedirs(step_cache, exist_ok=True)
 
@@ -91,17 +91,17 @@ def main():
             for t in task_list:
                 # MMLU usually reports 'acc' or 'acc,none'. Try 'acc,none' first then 'acc'
                 score = res_dict.get(t, {}).get("acc,none") or res_dict.get(t, {}).get("acc") or 0.0
-                row[f"{t}_acc"] = score;
-                total_acc += score;
+                row[f"{t}_acc"] = score
+                total_acc += score
                 count += 1
             if count > 0: row["average_acc"] = total_acc / count
 
             # --- Write to CSV ---
-            with open(args.output_file, "a", newline="", encoding="utf-8") as f:
+            with open(RESULTS_CSV, "a", newline="", encoding="utf-8") as f:
                 csv.DictWriter(f,
                                fieldnames=["step", "branch", "average_acc"] + [f"{t}_acc" for t in task_list]).writerow(
                     row)
-            logger.info(f"Completed step {step}. Avg Acc: {row['average_acc']:.4f}")
+            logger.warning(f"Completed step {step}. Avg Acc: {row['average_acc']:.4f}")
 
         except Exception as e:
             logger.error(f"Failed step {step}: {e}")
