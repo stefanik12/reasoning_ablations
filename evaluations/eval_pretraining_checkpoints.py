@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser(description="Run SchoolBench evaluation on model checkpoints.")
 parser.add_argument("--repo_id", type=str, help="Target HuggingFace repository ID (e.g., 'swiss-ai/Apertus-70B-2509')")
 parser.add_argument("--topk", type=str, default="1,10,100", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
+parser.add_argument("--num_samples_per_skill", type=int, default=1000, help="Number of evaluation samples per skill")
 args = parser.parse_args()
 
 REPO_ID = args.repo_id
@@ -42,7 +43,7 @@ CLEAN_CACHE = True
 SCHOOLBENCH_CONFIG = {
     "seed": 42,
     "cf_seed": 123,
-    "n_per_skill": 2,  # Items per skill
+    "n_per_skill": args.num_samples_per_skill,
     "shuffle": False,
     "max_new_tokens": 10
 }
