@@ -42,31 +42,7 @@ def main():
     )
 
     # Add the ms-swift-style model_kwargs attribute expected by the callback
-    args.model_kwargs = {
-        "schoolbench_enabled": True,
-        "schoolbench_seed": 42,
-        "schoolbench_cf_seed": 123,
-        "schoolbench_topk": [1, 5],
-        "schoolbench_shuffle": False,
-        # Keep it tiny for a quick run:
-        "schoolbench_n_per_skill": {
-            "relational_reasoning": 1,
-            "rule_induction": 1,
-            "working_memory_maintenance": 1,
-            "working_memory_manipulation": 1,
-            "quantitative_reasoning": 1,
-            "cognitive_control_inhibition": 1,
-            "symbol_recognition": 1,
-            "vocabulary": 1,
-            "phonological_awareness": 1,
-            "instruction_comprehension": 1,
-            "fine_motor_proxy": 1,
-            "social_emotional_awareness": 1,
-            "metacognitive_self_estimation": 1,
-        },
-        "schoolbench_cf_strategy": "random",
-        "schoolbench_write_samples": True,
-    }
+    args.model_kwargs = "evaluations/schoolbench_kwargs.json"
 
     # 3) Build dummy state/control and run callback.on_evaluate()
     cb = SchoolBenchEvalCallback()
