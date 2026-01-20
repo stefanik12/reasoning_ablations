@@ -86,7 +86,7 @@ def score_one(
     # labels[:, prompt_len+1:] = -100  # aggregating over all label tokens
 
     # Use Autocast for compatibility with Apertus/Olmo layers (xIELU etc)
-    with torch.autocast(device_type="cuda", dtype=torch.float16):
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         logits = model(input_ids=input_ids, attention_mask=attn_mask).logits
 
     shift_logits = logits[:, :-1, :]
