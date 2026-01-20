@@ -49,20 +49,27 @@ SCHOOLBENCH_CONFIG = {
 
 
 def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
+    """Returns sorted list of branches matching step intervals."""
+    logger.warning(f"Fetching branches from {repo_id}...")
     try:
         refs = list_repo_refs(repo_id)
-    except Exception as e:
-        logger.error("Error listing refs: %s", e)
+    except (OSError, ValueError) as e:
+        logger.error(f"Error listing refs: {e}")
         return []
 
-    out = []
-    pat = re.compile(r"^step(\d+)")
-    for b in refs.branches:
-        m = pat.match(b.name)
-        if m and int(m.group(1)) % interval == 0:
-            out.append({"step": int(m.group(1)), "name": b.name})
+    branches = []
+    pattern = re.compile(r"^step(\d+)(?:.*)?$")
 
-    return [{"step": 0, "name": "main"}]
+    for b in refs.branches:
+        match = pattern.match(b.name)
+        if match:
+            step = int(match.group(1))
+            if step % interval == 0:
+                branches.append({"step": step, "name": b.name})
+
+    sorted_branches = sorted(branches, key=lambda x: x["step"], reverse=True)
+    logger.warning(f"Identified {len(sorted_branches)} target branches.")
+    return sorted_branches
 
 
 def get_processed_steps(csv_path: str) -> set:
