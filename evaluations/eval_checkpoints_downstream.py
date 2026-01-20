@@ -32,7 +32,7 @@ def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
         return []
 
     branches = []
-    pattern = re.compile(r"^step(\d+)(?:.*)?$")
+    pattern = re.compile(r"(?:.*)?step(\d+)(?:.*)?$")
 
     for b in refs.branches:
         match = pattern.match(b.name)
