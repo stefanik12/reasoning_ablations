@@ -1,100 +1,77 @@
-from vllm import LLM, SamplingParams
 import json
 import argparse
 from pathlib import Path
 import torch
-
-def check_response(response: str, expected: str) -> dict:
-    
-    matches = {}
-    response = response.strip()
-    expected = expected.strip()
-    
-    if not response or not expected:
-        return {"exact": False, "fuzzy": False}
-    
-    # We're logging exact matched responses and if the final part of the answer contains the expected response
-    matches["exact"] = True if response == expected else False
-    matches["fuzzy"] = response.endswith(expected)
-
-    return matches
+from evaluations.scoring import score_one
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from evaluations.eval_model import get_device
+from evaluations.counterfactual_transform import generate_dataset
+import tempfile
+import os
+from typing import List
 
 
 def main(model_name: str, 
-         temperature: float = 0.6, 
-         input_path: str = "data/dataset.json", 
+         topk_list: List[int],
          output_path: str = "data/results.json", 
-         trust_remote_code: bool = False,
-         max_model_len: int = 4096,
-         max_tokens: int = 128):
+         n_samples_per_skill: int = 2500,
+         seed: int = 42,
+         ):
     
     # Check if GPUs are properly exposed
     print(f"CUDA available: {torch.cuda.is_available()}")
     print(f"GPU count: {torch.cuda.device_count()}\n")
 
-    
-    # Load dataset
-    input_path = Path(input_path)
-    with open(input_path, "r", encoding="utf-8") as f:
-        problems = json.load(f)
+    # --- Step 1: Generate Data (Temp File Workaround) ---
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        temp_path = tmp.name
+
+    try:
+        generate_dataset(n_samples_per_skill, temp_path, seed)
+        with open(temp_path, "r", encoding="utf-8") as f:
+            problems = json.load(f)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
 
     print(f"Loaded {len(problems)} problems")
 
     # Load model onto GPUs
     print(f"Loading model: {model_name}")
-    num_gpus = torch.cuda.device_count()
+    device = get_device()
 
-    llm = LLM(
-        model=model_name,
-        tensor_parallel_size=num_gpus,
-        max_model_len=max_model_len,
-        trust_remote_code=trust_remote_code
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.padding_side = "left"  # Mandatory for decoder-only batched inference
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16 if device != "cpu" else torch.float32,
+            device_map="auto"
     )
 
-    print("Model loaded successfully!")
-
-    # Sampling parameters for generation
-    sampling_params = SamplingParams(
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stop=["\n"]     # Weird quirk: if we remove this, the LLM will generate new questions
-    )
-
-    # Prepare all prompts
-    base_prompts = [p["base"] for p in problems]
-    cf_prompts = [p["cf"] for p in problems]
-    all_prompts = base_prompts + cf_prompts
-
-    print(f"Generating responses for {len(all_prompts)} prompts...")
-
-    # Generate all responses in one batch
-    outputs = llm.generate(all_prompts, sampling_params)
-
-    # Split results back into base and cf
-    n = len(problems)
-    base_outputs = outputs[:n]
-    cf_outputs = outputs[n:]
+    model.eval()
 
     # Construct results JSON
     results = []
     for i, problem in enumerate(problems):
-        base_resp = base_outputs[i].outputs[0].text
-        cf_resp = cf_outputs[i].outputs[0].text
-
-        base_pass = check_response(base_resp, problem["base_completion"])
-        cf_pass = check_response(cf_resp, problem["cf_completion"])
+        
+        base_scoring = score_one(model, tokenizer, problem["base"], problem["base_completion"], topk_list, model.device)
+        cf_scoring = score_one(model, tokenizer, problem["cf"], problem["cf_completion"], topk_list, model.device)
 
         result = {
             "base_prompt": problem["base"],
             "base_expected": problem["base_completion"],
-            "base_response": base_resp,
-            "base_pass_exact": base_pass["exact"],
-            "base_pass_fuzzy": base_pass["fuzzy"],
+            "base_nll_sum": base_scoring["nll_sum"],
+            "base_tok": base_scoring["tok"],
+            "base_topk_hits": base_scoring["topk_hits"],
             "cf_prompt": problem["cf"],
             "cf_expected": problem["cf_completion"],
-            "cf_response": cf_resp,
-            "cf_pass_exact": cf_pass["exact"],
-            "cf_pass_fuzzy": cf_pass["fuzzy"],
+            "cf_nll_sum": cf_scoring["nll_sum"],
+            "cf_tok": cf_scoring["tok"],
+            "cf_topk_hits": cf_scoring["topk_hits"],
             "cf_edit": problem["cf_edit"],
             "skill": problem["skill"],
         }
@@ -116,21 +93,15 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Tests given LLM on task dataset")
     parser.add_argument("--model_name", help="Model tag found on Hugging Face")
-    parser.add_argument("-t", "--temperature", type=float, default=0.6, help="Model temperature")
-    parser.add_argument("--input_path", help="Path to the input dataset")
     parser.add_argument("--output_path", help="Path to output dataset")
-    parser.add_argument("--trust_remote_code", action="store_true", help="Trust remote code (required for some models)")
-    parser.add_argument("--max_model_len", type=int, default=4096, help="Maximum context window")
-    parser.add_argument("--max_tokens",type=int, default=128, help="Maximum number of tokens in prompt + output")
-    
+    parser.add_argument("-n", "--n_samples_per_skill", type=int, help="Number of samples to generate per skill (note, duplicates will be discarded so actual samples per skill will be less than this)")
+    parser.add_argument("-s", "--seed", type=int, help="Seed used for random number generation")
+
     args = parser.parse_args()
 
-    main(
-        args.model_name,
-        args.temperature,
-        args.input_path,
-        args.output_path,
-        args.trust_remote_code,
-        args.max_model_len,
-        args.max_tokens
+    main(args.model_name, 
+         args.topk_list,
+         args.output_path, 
+         args.n_samples_per_skill,
+         args.seed
     )
