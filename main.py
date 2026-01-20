@@ -5,10 +5,11 @@ import torch
 from evaluations.scoring import score_one
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from evaluations.eval_model import get_device
-from evaluations.counterfactual_transform import generate_dataset
+from evaluations.generate_dataset import generate_dataset
 import tempfile
 import os
 from typing import List
+from tqdm import tqdm
 
 
 def main(model_name: str, 
@@ -56,21 +57,29 @@ def main(model_name: str,
 
     # Construct results JSON
     results = []
-    for i, problem in enumerate(problems):
-        
+    print("Scoring models")
+    for problem in tqdm(problems, desc="Scoring problems"):
+
         base_scoring = score_one(model, tokenizer, problem["base"], problem["base_completion"], topk_list, model.device)
         cf_scoring = score_one(model, tokenizer, problem["cf"], problem["cf_completion"], topk_list, model.device)
-
+        
         result = {
             "base_prompt": problem["base"],
-            "base_expected": problem["base_completion"],
-            "base_nll_sum": base_scoring["nll_sum"],
-            "base_tok": base_scoring["tok"],
+            "base_expected": base_scoring["expected"],
+            "base_nll": base_scoring["nll"],
+            "base_n_tokens": base_scoring["n_tokens"],
+            "base_most_likely": base_scoring["most_likely"], 
+            "base_topn": base_scoring["topn"],
             "base_topk_hits": base_scoring["topk_hits"],
+            "base_topk_total": base_scoring["topk_total"],
             "cf_prompt": problem["cf"],
-            "cf_expected": problem["cf_completion"],
-            "cf_nll_sum": cf_scoring["nll_sum"],
-            "cf_tok": cf_scoring["tok"],
+            "cf_expected": cf_scoring["expected"],
+            "cf_nll": cf_scoring["nll"],
+            "cf_n_tokens": cf_scoring["n_tokens"],
+            "cf_most_likely": cf_scoring["most_likely"], 
+            "cf_topn": cf_scoring["topn"],
+            "cf_topk_hits": cf_scoring["topk_hits"],
+            "cf_topk_total": cf_scoring["topk_total"],
             "cf_topk_hits": cf_scoring["topk_hits"],
             "cf_edit": problem["cf_edit"],
             "skill": problem["skill"],
@@ -94,8 +103,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tests given LLM on task dataset")
     parser.add_argument("--model_name", help="Model tag found on Hugging Face")
     parser.add_argument("--output_path", help="Path to output dataset")
-    parser.add_argument("-n", "--n_samples_per_skill", type=int, help="Number of samples to generate per skill (note, duplicates will be discarded so actual samples per skill will be less than this)")
-    parser.add_argument("-s", "--seed", type=int, help="Seed used for random number generation")
+    parser.add_argument("--topk_list", type=List, default=[1,10], help="k values to display top k for")
+    parser.add_argument("-n", "--n_samples_per_skill", type=int, default=2500, help="Number of samples to generate per skill (note, duplicates will be discarded so actual samples per skill will be less than this)")
+    parser.add_argument("-s", "--seed", type=int, default=42, help="Seed used for random number generation")
 
     args = parser.parse_args()
 

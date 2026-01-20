@@ -13,30 +13,34 @@ import torch.nn.functional as F
 class _Agg:
     nll: float = 0.0
     n_tokens: int = 0
-    topk: Dict[int, Tuple[int, int]] = None
+    topk: Dict[str, Tuple[int, int]] = None
 
     def __post_init__(self):
         if self.topk is None:
             self.topk = {}
 
 def agg_new(topk_list: List[int]) -> _Agg:
-    return _Agg(nll=0.0, n_tokens=0, topk={k: (0, 0) for k in topk_list})
+    return _Agg(nll=0.0, n_tokens=0, topk={str(k): (0, 0) for k in topk_list})
 
 def agg_add(agg: _Agg, out: Dict[str, Any], topk_list: List[int]) -> None:
     agg.nll += float(out.get("nll", 0.0))
     agg.n_tokens += int(out.get("n_tokens", 0))
+
+    topk_hits = out.get("topk_hits", {}) or {}
+    topk_total = out.get("topk_total", {}) or {}
+
     for k in topk_list:
-        h = int(out.get(f"top{k}_hits", 0))
-        t = int(out.get(f"top{k}_total", 0))
-        hh, tt = agg.topk.get(k, (0, 0))
-        agg.topk[k] = (hh + h, tt + t)
+        h = int(topk_hits.get(str(k), 0))
+        t = int(topk_total.get(str(k), 0))
+        hh, tt = agg.topk.get(str(k), (0, 0))
+        agg.topk[str(k)] = (hh + h, tt + t)
 
 def agg_finalize(agg: _Agg, prefix: str, topk_list: List[int]) -> Dict[str, float]:
     tok = max(agg.n_tokens, 1)
     out: Dict[str, float] = {f"{prefix}_ppl": float(math.exp(agg.nll / tok)),
                              f"{prefix}_n_tokens": float(agg.n_tokens)}
     for k in topk_list:
-        h, t = agg.topk.get(k, (0, 0))
+        h, t = agg.topk.get(str(k), (0, 0))
         out[f"{prefix}_top{k}_acc"] = float(h / max(t, 1))
     return out
 
@@ -67,11 +71,14 @@ def score_one(
     prompt_len = enc_prompt["input_ids"].shape[1]
     T = input_ids.shape[1]
     if T <= prompt_len:
-        out: Dict[str, Any] = {"nll": 0.0, "n_tokens": 0,
-                               "expected": gold.strip(), "most_likely": "", "topn": {}}
-        for k in topk_list:
-            out[f"top{k}_hits"] = 0
-            out[f"top{k}_total"] = 0
+        out: Dict[str, Any] = {"nll": 0.0, 
+                               "n_tokens": 0,
+                               "expected": gold.strip(), 
+                               "most_likely": "", 
+                               "topn": {}, 
+                               "topk_hits": {str(k): 0 for k in topk_list},
+                               "topk_total": {str(k): 0 for k in topk_list},}
+        
         return out
 
     labels = input_ids.clone()
@@ -98,11 +105,13 @@ def score_one(
 
     pos = mask.nonzero(as_tuple=False)
     if pos.numel() == 0:
-        out: Dict[str, Any] = {"nll": 0.0, "n_tokens": 0,
-                               "expected": gold.strip(), "most_likely": "", "topn": {}}
-        for k in topk_list:
-            out[f"top{k}_hits"] = 0
-            out[f"top{k}_total"] = 0
+        out: Dict[str, Any] = {"nll": 0.0, 
+                               "n_tokens": 0,
+                               "expected": gold.strip(), 
+                               "most_likely": "", 
+                               "topn": {}, 
+                               "topk_hits": {str(k): 0 for k in topk_list},
+                               "topk_total": {str(k): 0 for k in topk_list},}
         return out
 
     idx = mask[0].nonzero(as_tuple=False).squeeze(-1)  # positions in shift space
@@ -111,25 +120,32 @@ def score_one(
     ml_ids = shift_logits[0, idx].argmax(dim=-1).tolist()
     most_likely_seq = tokenizer.convert_tokens_to_string([tokenizer.convert_ids_to_tokens(i) for i in ml_ids]).strip()
 
-    topn: Dict[int, List[List[str]]] = {}
-    out: Dict[str, Any] = {"nll": nll, "n_tokens": n_tokens,
-                           "expected": gold.strip(), "most_likely": most_likely_seq, "topn": topn}
+    topn: Dict[str, List[List[str]]] = {}
+    topk_hits: Dict[str, int] = {}
+    topk_total: Dict[str, int] = {}
+    out: Dict[str, Any] = {"nll": nll, 
+                           "n_tokens": n_tokens,
+                           "expected": gold.strip(), 
+                           "most_likely": most_likely_seq, 
+                           "topn": topn,
+                           "topk_hits": topk_hits,
+                           "topk_total": topk_total}
 
     for k in topk_list:
         if n_tokens == 0:
-            out[f"top{k}_hits"] = 0
-            out[f"top{k}_total"] = 0
-            topn[k] = []
+            topk_hits[str(k)] = 0
+            topk_total[str(k)] = 0
+            topn[str(k)] = []
             continue
 
         topk_ids = torch.topk(shift_logits, k=k, dim=-1).indices  # [1,T-1,k]
         hits = ((topk_ids == shift_labels.unsqueeze(-1)) & mask.unsqueeze(-1)).any(dim=-1).sum().item()
 
-        out[f"top{k}_hits"] = int(hits)
-        out[f"top{k}_total"] = int(n_tokens)
+        topk_hits[str(k)] = int(hits)
+        topk_total[str(k)] = int(n_tokens)
 
         # Aggregate top-n across ALL scored (gold) positions: shape [n_tokens, k]
         ids = torch.topk(shift_logits[0, idx], k=k, dim=-1).indices.tolist()
-        topn[k] = [[tokenizer.convert_ids_to_tokens(i) for i in row] for row in ids]
+        topn[str(k)] = [[tokenizer.convert_ids_to_tokens(i) for i in row] for row in ids]
 
     return out
