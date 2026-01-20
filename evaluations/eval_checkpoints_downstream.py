@@ -52,62 +52,88 @@ def get_processed_steps(csv_path: str) -> set:
     with open(csv_path, "r", encoding="utf-8") as f:
         return {int(row["step"]) for row in csv.DictReader(f) if row.get("step")}
 
+def extract_metrics(results_dict: dict) -> dict:
+    """
+    Flattens lm_eval results into a single dictionary mapping Task -> Score.
+    Prioritizes 'acc,none', then 'acc', then 'acc_norm'.
+    """
+    flat_metrics = {}
+    for task_name, metrics in results_dict.items():
+        # Handle different metric names depending on the task
+        # MMLU typically uses 'acc' or 'acc,none'
+        score = (metrics.get("acc,none")
+                 or metrics.get("acc")
+                 or metrics.get("acc_norm,none")
+                 or metrics.get("acc_norm")
+                 or 0.0)
+        flat_metrics[task_name] = score
+    return flat_metrics
 
 def main():
     branches = get_target_branches(args.repo_id, args.step_interval)
-    processed = get_processed_steps(RESULTS_CSV)
-    task_list = args.tasks.split(",")
+    processed_steps = get_processed_steps(RESULTS_CSV)
+    task_input = args.tasks.split(",")
 
-    # Initialize CSV header if file doesn't exist
-    if not os.path.exists(RESULTS_CSV):
-        with open(RESULTS_CSV, "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(["step", "branch", "average_acc"] + [f"{t}_acc" for t in task_list])
+    # We do NOT write the header yet. We wait for the first result to determine
+    # the full list of decomposed subtasks (e.g. mmlu_abstract_algebra, etc).
 
     for b in branches:
         step, branch_name = b["step"], b["name"]
-        if step in processed:
-            logger.warning(f"Skipping step {step} (already processed)");
-            continue
+        if step in processed_steps:
+            logger.info(f"Skipping step {step} (already processed)"); continue
 
-        # Create a temporary cache directory for this specific step to ensure isolation
-        logger.warning(f"Evaluating Step {step} ({branch_name})")
-        step_cache = os.path.abspath(f"./tmp_cache_step_{step}")
-        os.makedirs(step_cache, exist_ok=True)
+        logger.info(f"Evaluating Step {step} ({branch_name})")
+        step_cache_dir = os.path.abspath(f"./tmp_cache_step_{step}")
+        os.makedirs(step_cache_dir, exist_ok=True)
 
         try:
-            # Construct model_args with specific revision and cache dir.
-            # trust_remote_code=True is required for OLMo/Apertus.
-            model_args = f"pretrained={args.repo_id},revision={branch_name},trust_remote_code=True,cache_dir={step_cache}"
+            model_args = f"pretrained={args.repo_id},revision={branch_name},trust_remote_code=True,cache_dir={step_cache_dir}"
+
             # Run LM Eval
-            results = lm_eval.simple_evaluate(model="hf", model_args=model_args, tasks=task_list,
-                                              num_fewshot=5, batch_size=args.batch_size, device=args.device,
-                                              log_samples=False)
-            # --- Parse Results ---
+            # Note: When 'mmlu' is passed, lm_eval runs all subtasks.
+            results = lm_eval.simple_evaluate(model="hf", model_args=model_args, tasks=task_input,
+                                              num_fewshot=5, batch_size=args.batch_size, device=args.device, log_samples=False)
+
+            # --- Process Results ---
+            # 'results["results"]' contains keys for the group AND all subtasks
             res_dict = results["results"]
-            row = {"step": step, "branch": branch_name, "average_acc": 0.0}
-            total_acc, count = 0.0, 0
+            metric_row = extract_metrics(res_dict)
 
-            # Extract scores for requested tasks
-            for t in task_list:
-                # MMLU usually reports 'acc' or 'acc,none'. Try 'acc,none' first then 'acc'
-                score = res_dict.get(t, {}).get("acc,none") or res_dict.get(t, {}).get("acc") or 0.0
-                row[f"{t}_acc"] = score
-                total_acc += score
-                count += 1
-            if count > 0: row["average_acc"] = total_acc / count
+            # Prepare the full row data
+            row_data = {"step": step, "branch": branch_name}
+            row_data.update(metric_row)
 
-            # --- Write to CSV ---
+            # --- CSV Handling ---
+            file_exists = os.path.exists(RESULTS_CSV)
+
+            # Determine fieldnames (columns)
+            # If file exists, use existing columns. If new, generate from this first run.
+            if file_exists:
+                with open(RESULTS_CSV, "r", encoding="utf-8") as f:
+                    fieldnames = csv.DictReader(f).fieldnames
+            else:
+                # Create columns: step, branch, then sorted task names
+                task_cols = sorted(metric_row.keys())
+                fieldnames = ["step", "branch"] + task_cols
+
+            # Write to CSV
             with open(RESULTS_CSV, "a", newline="", encoding="utf-8") as f:
-                csv.DictWriter(f,
-                               fieldnames=["step", "branch", "average_acc"] + [f"{t}_acc" for t in task_list]).writerow(
-                    row)
-            logger.warning(f"Completed step {step}. Avg Acc: {row['average_acc']:.4f}")
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(row_data)
+
+            # Calculate average for logging purposes (simple mean of all columns found)
+            avg_score = sum(metric_row.values()) / len(metric_row) if metric_row else 0
+            logger.info(f"Completed step {step}. Approx Avg: {avg_score:.4f}")
 
         except Exception as e:
-            logger.error(f"Failed step {step}: {e}")
+            logger.error(f"Failed to evaluate step {step}: {e}")
+            # Optional: Log the full traceback if needed
+            # import traceback; traceback.print_exc()
         finally:
-            # Cleanup Cache
-            if CLEAN_CACHE: shutil.rmtree(step_cache, ignore_errors=True)
+            if CLEAN_CACHE:
+                shutil.rmtree(step_cache_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
