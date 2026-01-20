@@ -30,12 +30,13 @@ parser = argparse.ArgumentParser(description="Run SchoolBench evaluation on mode
 parser.add_argument("--repo_id", type=str, help="Target HuggingFace repository ID (e.g., 'swiss-ai/Apertus-70B-2509')")
 parser.add_argument("--topk", type=str, default="1,10,100", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
 parser.add_argument("--num_samples_per_skill", type=int, default=1000, help="Number of evaluation samples per skill")
+parser.add_argument("--step_interval", type=int, default=10000, help="Number of training steps between evaluated checkpoints")
 args = parser.parse_args()
 
 REPO_ID = args.repo_id
 TOPK_LIST = sorted({int(x) for x in args.topk.split(",") if x.strip()}) if args.topk else []
 
-STEP_INTERVAL = 10000
+STEP_INTERVAL = args.step_interval
 METRICS_CSV = "schoolbench_%s_metrics.csv" % REPO_ID.split("/")[-1]
 SAMPLES_CSV = "schoolbench_%s_samples.csv" % REPO_ID.split("/")[-1]
 CLEAN_CACHE = True
