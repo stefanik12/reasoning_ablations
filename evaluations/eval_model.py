@@ -3,7 +3,7 @@
 
 import argparse, json, os, tempfile, torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from evaluations.counterfactual_transform import generate_dataset
+from evaluations.generate_dataset import generate_dataset
 
 
 def get_device():
