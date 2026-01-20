@@ -5,4 +5,5 @@ deepspeed==0.18.3
 git+https://github.com/stefanik12/transformers-gated-qwen.git@gated-qwen
 ai2-olmo
 wandb
+lm_eval[hf]
 # --extra-index-url https://download.pytorch.org/whl/cu129
