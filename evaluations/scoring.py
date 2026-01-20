@@ -49,12 +49,14 @@ def score_one(
     gold: str,
     topk_list: List[int],
     device: torch.device,
+    mask_chars_only: str = " ,()",
 ) -> Dict[str, Any]:
     """
     Gold-conditioned scoring:
       - input = prompt + " " + gold
       - labels masked on prompt tokens
-      - NLL + top-k computed on ALL gold tokens
+      - NLL + top-k computed only on gold tokens (ALL gold tokens)
+      - optionally drop label-token positions whose decoded expected token consists only of mask_chars_only
     """
     full = prompt.strip() + " " + gold.strip()
 
@@ -93,11 +95,9 @@ def score_one(
     ).view(shift_labels.size())
 
     mask = (shift_labels != -100)
-    nll = float((loss * mask).sum().item())
-    n_tokens = int(mask.sum().item())
+    idx = mask[0].nonzero(as_tuple=False).squeeze(-1)  # scored positions in shift space
 
-    pos = mask.nonzero(as_tuple=False)
-    if pos.numel() == 0:
+    if idx.numel() == 0:
         out: Dict[str, Any] = {"nll": 0.0, "n_tokens": 0,
                                "expected": gold.strip(), "most_likely": "", "topn": {}}
         for k in topk_list:
@@ -105,10 +105,34 @@ def score_one(
             out[f"top{k}_total"] = 0
         return out
 
-    idx = mask[0].nonzero(as_tuple=False).squeeze(-1)  # positions in shift space
+    allowed = set(mask_chars_only)
 
-    # Most-likely sequence across ALL scored (gold) positions
-    ml_ids = shift_logits[0, idx].argmax(dim=-1).tolist()
+    # Filter out non-informative expected tokens by decoded text
+    keep = []
+    for p in idx.tolist():
+        tid = int(shift_labels[0, p].item())
+        s = tokenizer.decode([tid], clean_up_tokenization_spaces=False)
+        if s and (set(s) <= allowed):
+            continue
+        keep.append(p)
+
+    if not keep:
+        out: Dict[str, Any] = {"nll": 0.0, "n_tokens": 0,
+                               "expected": gold.strip(), "most_likely": "", "topn": {}}
+        for k in topk_list:
+            out[f"top{k}_hits"] = 0
+            out[f"top{k}_total"] = 0
+        return out
+
+    keep_idx = torch.tensor(keep, device=shift_labels.device, dtype=torch.long)
+    keep_mask = torch.zeros_like(mask)
+    keep_mask[0, keep_idx] = True
+
+    nll = float((loss * keep_mask).sum().item())
+    n_tokens = int(keep_mask.sum().item())
+
+    # Most-likely sequence across kept label positions
+    ml_ids = shift_logits[0, keep_idx].argmax(dim=-1).tolist()
     most_likely_seq = tokenizer.convert_tokens_to_string([tokenizer.convert_ids_to_tokens(i) for i in ml_ids]).strip()
 
     topn: Dict[int, List[List[str]]] = {}

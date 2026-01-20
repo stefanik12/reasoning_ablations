@@ -113,12 +113,12 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
             nonlocal writer
             out = score_one(model, tokenizer, prompt, gold, TOPK_LIST, device)
             if writer is None:
-                fields = ["model_id", "step", "branch", "skill", "kind", "prompt", "gold", *out.keys()]
+                fields = ["model_id", "step", "branch", "skill", "kind", "prompt", *out.keys()]
                 writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
                 if not file_exists:
                     writer.writeheader()
             row = {"model_id": model_id, "step": step_num, "branch": model_id, "skill": skill, "kind": kind,
-                   "prompt": prompt, "gold": gold, **out}
+                   "prompt": prompt, **out}
             writer.writerow(row)
             return out
 
