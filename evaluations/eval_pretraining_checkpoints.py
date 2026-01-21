@@ -31,6 +31,7 @@ parser.add_argument("--repo_id", type=str, help="Target HuggingFace repository I
 parser.add_argument("--topk", type=str, default="1,10,100", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
 parser.add_argument("--num_samples_per_skill", type=int, default=1000, help="Number of evaluation samples per skill")
 parser.add_argument("--step_interval", type=int, default=10000, help="Number of training steps between evaluated checkpoints")
+parser.add_argument("--only_final_model_eval", action="store_true", help="If set, only the final model will be evaluated.")
 args = parser.parse_args()
 
 REPO_ID = args.repo_id
@@ -68,10 +69,12 @@ def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
             step = int(match.group(1))
             if step % interval == 0:
                 branches.append({"step": step, "name": b.name})
-
-    sorted_branches = sorted(branches, key=lambda x: x["step"], reverse=True)
-    logger.warning(f"Identified {len(sorted_branches)} target branches.")
-    return sorted_branches
+    if args.only_final_model_eval:
+        return [{"step": 0, "name": "main"}]
+    else:
+        sorted_branches = sorted(branches, key=lambda x: x["step"], reverse=True)
+        logger.warning(f"Identified {len(sorted_branches)} target branches.")
+        return sorted_branches
 
 
 def get_processed_steps(csv_path: str) -> set:
