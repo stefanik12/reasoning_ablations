@@ -48,7 +48,8 @@ def get_target_branches(repo_id: str, interval: int) -> List[Dict[str, Any]]:
 
 def get_processed_steps(csv_path: str) -> set:
     """Check which steps have already been processed to resume runs."""
-    if not os.path.exists(csv_path): return set()
+    if not os.path.exists(csv_path):
+        return set()
     with open(csv_path, "r", encoding="utf-8") as f:
         return {int(row["step"]) for row in csv.DictReader(f) if row.get("step")}
 
@@ -71,13 +72,16 @@ def extract_metrics(results_dict: dict) -> dict:
 
 def main():
     branches = get_target_branches(args.repo_id, args.step_interval)
+    logger.warning("Found target branches: %s" , branches)
     processed_steps = get_processed_steps(RESULTS_CSV)
+    logger.warning("Already processed branches: %s", processed_steps)
     task_input = args.tasks.split(",")
 
     # We do NOT write the header yet. We wait for the first result to determine
     # the full list of decomposed subtasks (e.g. mmlu_abstract_algebra, etc).
 
     for b in branches:
+        logger.warning("Processing branch %s", b)
         step, branch_name = b["step"], b["name"]
         if step in processed_steps:
             logger.info(f"Skipping step {step} (already processed)"); continue

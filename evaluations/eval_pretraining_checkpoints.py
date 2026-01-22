@@ -209,6 +209,7 @@ def main():
     for b in branches:
         logger.warning("Starting evaluating branch %s", b)
         if b["step"] in completed:
+            logger.warning("Branch %s marked as complete", b)
             continue
 
         step_cache = os.path.abspath(f"./tmp_cache_step_{b['step']}")
