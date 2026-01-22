@@ -5,7 +5,7 @@ import torch
 from evaluations.scoring import score_one
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from evaluations.eval_model import get_device
-from evaluations.generate_dataset import generate_dataset
+from evaluations.skillbench import generate_dataset
 import tempfile
 import os
 from typing import List
