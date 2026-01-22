@@ -16,7 +16,7 @@ def main(model_name: str,
          topk_list: List[int],
          output_path: str = "data/results.json", 
          n_samples_per_skill: int = 2500,
-         seed: int = 42,
+         seed: int = 42
          ):
     
     # Check if GPUs are properly exposed
@@ -80,7 +80,6 @@ def main(model_name: str,
             "cf_topn": cf_scoring["topn"],
             "cf_topk_hits": cf_scoring["topk_hits"],
             "cf_topk_total": cf_scoring["topk_total"],
-            "cf_topk_hits": cf_scoring["topk_hits"],
             "cf_edit": problem["cf_edit"],
             "skill": problem["skill"],
         }
@@ -104,7 +103,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", help="Model tag found on Hugging Face")
     parser.add_argument("--output_path", help="Path to output dataset")
     parser.add_argument("--topk_list", type=List, default=[1,10], help="k values to display top k for")
-    parser.add_argument("-n", "--n_samples_per_skill", type=int, default=2500, help="Number of samples to generate per skill (note, duplicates will be discarded so actual samples per skill will be less than this)")
+    parser.add_argument("-n", "--n_samples_per_skill", type=int, default=2500, help="Number of samples to draw per skill (note, duplicates will be discarded so returned samples per skill will be less than specified value)")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Seed used for random number generation")
 
     args = parser.parse_args()

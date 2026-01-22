@@ -4,14 +4,14 @@ from tqdm import tqdm
 from pathlib import Path
 import json
 from collections import Counter
+from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
 
 # -------------------------
 # Dataset generation
 # -------------------------
 
 def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/dataset.json", seed: int = 42):
-    from evaluations.developmental_skills import BenchmarkBuilder, BenchmarkSpec
-    rng = random.Random(0)
+    rng = random.Random(seed)
 
     # 1) Build a dataset using your existing BenchmarkBuilder
     spec = BenchmarkSpec(
@@ -69,6 +69,7 @@ def generate_dataset(n_samples_per_skill: int = 10000, output_path: str = "data/
                 "cf": cf["prompt"],
                 "cf_completion": cf["completion"],
                 "cf_edit": cf["meta"].get("cf_edit"),
+                "cf_meta": cf["meta"],
                 "skill": base["skill"]
             }
             # Check for duplicates before appending
