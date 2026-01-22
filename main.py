@@ -4,7 +4,6 @@ from pathlib import Path
 import torch
 from evaluations.scoring import score_one
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from evaluations.eval_model import get_device
 from evaluations.skillbench import generate_dataset
 import tempfile
 import os
@@ -42,7 +41,7 @@ def main(model_name: str,
 
     # Load model onto GPUs
     print(f"Loading model: {model_name}")
-    device = get_device()
+    device = "cuda:0"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.padding_side = "left"  # Mandatory for decoder-only batched inference

@@ -3,55 +3,19 @@ import csv
 import gc
 import logging
 import os
-import re
 import shutil
 from collections import defaultdict
-from typing import List, Dict, Any, Union
 import torch
-from huggingface_hub import list_repo_refs
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from pathlib import Path
 from tqdm import tqdm
 
 from evaluations.skillbench import generate_dataset
 from evaluations.scoring import score_one, agg_add, agg_new, agg_finalize
+from evaluations.eval_tools import get_processed_steps, get_target_branches, configure_logging
 
+configure_logging()
 logger = logging.getLogger(__name__)
-
-
-def get_target_branches(repo_id: str, interval: int, only_final_model_eval: bool = False) -> List[Dict[str, Any]]:
-    """Returns sorted list of branches matching step intervals."""
-    logger.warning(f"Fetching branches from {repo_id}...")
-    try:
-        refs = list_repo_refs(repo_id)
-    except (OSError, ValueError) as e:
-        logger.error(f"Error listing refs: {e}")
-        return []
-
-    branches = []
-    pattern = re.compile(r"(?:.*)?step(\d+)(?:.*)?$")
-
-    for b in refs.branches:
-        match = pattern.match(b.name)
-        if match:
-            step = int(match.group(1))
-            if step % interval == 0:
-                branches.append({"step": step, "name": b.name})
-    if only_final_model_eval:
-        return [{"step": 0, "name": "main"}]
-    else:
-        sorted_branches = sorted(branches, key=lambda x: x["step"], reverse=True)
-        logger.warning(f"Identified {len(sorted_branches)} target branches.")
-        return sorted_branches
-
-
-def get_processed_steps(csv_path: Union[str, Path]) -> set:
-    csv_path = Path(csv_path)
-    if not csv_path.exists():
-        return set()
-    with open(csv_path, "r", encoding="utf-8") as f:
-        return {int(r["step"]) for r in csv.DictReader(f) if r.get("step")}
-
 
 def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id, samples_csv, topk_list):
     device = next(model.parameters()).device
@@ -135,7 +99,7 @@ def main(repo_id: str,
          step_interval: int,
          only_final_model_eval: bool,
          shuffle: bool,
-         clean_cache: bool):
+         keep_cache: bool):
 
     topk_list = sorted({int(x) for x in topk.split(",") if x.strip()}) if topk else []
 
@@ -144,7 +108,7 @@ def main(repo_id: str,
     samples_csv = Path(output_dir) / f"schoolbench_{repo_id.split('/')[-1]}_samples.csv"
     metrics_csv = Path(output_dir) / f"schoolbench_{repo_id.split('/')[-1]}_metrics.csv"
 
-    print("========== Generating data ==========")
+    logger.info("========== Generating data ==========")
     branches = get_target_branches(repo_id, step_interval, only_final_model_eval)
     completed = get_processed_steps(metrics_csv)
     data = generate_dataset(n_samples_per_skill, seed=seed, shuffle=shuffle)
@@ -168,19 +132,22 @@ def main(repo_id: str,
         fields.append(f"skill.{s}.gap")
 
 
-    print("\n========== Scoring model ==========")
+    logger.info("\n========== Scoring model ==========")
     for b in branches:
         if b["step"] in completed:
             continue
         
-        print(f"\nStep {b["step"]}")
+        logger.info(f"\nStep {b["step"]}")
         step_cache = Path(f"./tmp_cache_step_{b['step']}").resolve()
+        step_cache.mkdir(parents=True, exist_ok=True)
+
         model = None
         tok = None
         try:
-            print("Loading model...")
+            logger.info("Loading model...")
+            trust_remote_code = False if only_final_model_eval else True
             tok = AutoTokenizer.from_pretrained(repo_id, revision=b["name"],
-                                                trust_remote_code=True, cache_dir=step_cache)
+                                                trust_remote_code=trust_remote_code, cache_dir=step_cache)
             if tok.pad_token is None:
                 tok.pad_token = tok.eos_token
 
@@ -190,11 +157,11 @@ def main(repo_id: str,
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
                 cache_dir=step_cache
             ).eval()
-            print("Model loaded successfully!")
+            logger.info("Model loaded successfully!")
 
             m = evaluate_checkpoint(model, tok, data, b["step"], b["name"], samples_csv, topk_list)
 
-            print("Saving output")
+            logger.info("Saving output")
             write_header = not os.path.exists(metrics_csv)
             with open(metrics_csv, "a", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -203,7 +170,7 @@ def main(repo_id: str,
                 w.writerow(m)
 
         finally:
-            print("Clearing memory")
+            logger.debug("Clearing model and tokenizer from memory")
             if model is not None:
                 del model
             if tok is not None:
@@ -211,10 +178,11 @@ def main(repo_id: str,
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            if clean_cache:
+            if not keep_cache:
+                logger.debug("Clearing cache")
                 shutil.rmtree(step_cache, ignore_errors=True)
         
-        print("\nDone")
+        logger.info("\nDone")
 
 
 if __name__ == "__main__":
@@ -227,7 +195,7 @@ if __name__ == "__main__":
     parser.add_argument("--step_interval", type=int, default=10000, help="Number of training steps between evaluated checkpoints")
     parser.add_argument("--only_final_model_eval", action="store_true", help="If set, only the final model will be evaluated.")
     parser.add_argument("--shuffle", action="store_true", help="If set, data will be shuffled on generation")
-    parser.add_argument("--clean_cache", action="store_true", help="If set, clears cache after running.")
+    parser.add_argument("--keep_cache", action="store_true", help="If set, keeps cache after running (normally clears by default)")
     args = parser.parse_args()
 
     main(repo_id=args.repo_id,
@@ -238,4 +206,4 @@ if __name__ == "__main__":
          step_interval=args.step_interval,
          only_final_model_eval=args.only_final_model_eval,
          shuffle=args.shuffle,
-         clean_cache=args.clean_cache)
+         keep_cache=args.keep_cache)
