@@ -16,8 +16,10 @@ def main(model_name: str,
          topk_list: List[int],
          output_path: str = "data/results.json", 
          n_samples_per_skill: int = 2500,
-         seed: int = 42,
+         seed: int = 42
          ):
+    
+    topk_list = sorted({int(x) for x in topk_list.split(",") if x.strip()}) if topk_list else []
     
     # Check if GPUs are properly exposed
     print(f"CUDA available: {torch.cuda.is_available()}")
@@ -80,7 +82,6 @@ def main(model_name: str,
             "cf_topn": cf_scoring["topn"],
             "cf_topk_hits": cf_scoring["topk_hits"],
             "cf_topk_total": cf_scoring["topk_total"],
-            "cf_topk_hits": cf_scoring["topk_hits"],
             "cf_edit": problem["cf_edit"],
             "skill": problem["skill"],
         }
@@ -103,8 +104,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Tests given LLM on task dataset")
     parser.add_argument("--model_name", help="Model tag found on Hugging Face")
     parser.add_argument("--output_path", help="Path to output dataset")
-    parser.add_argument("--topk_list", type=List, default=[1,10], help="k values to display top k for")
-    parser.add_argument("-n", "--n_samples_per_skill", type=int, default=2500, help="Number of samples to generate per skill (note, duplicates will be discarded so actual samples per skill will be less than this)")
+    parser.add_argument("--topk_list", type=str, default="1,10,100", help="k values to display top k for (input as a comma separated string, e.g. 1,10,100)")
+    parser.add_argument("-n", "--n_samples_per_skill", type=int, default=2500, help="Number of samples to draw per skill (note, duplicates will be discarded so returned samples per skill will be less than specified value)")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Seed used for random number generation")
 
     args = parser.parse_args()

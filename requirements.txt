@@ -4,5 +4,7 @@ deepspeed==0.18.3
 # for arch testing: our fork of transformers<4.57.3
 git+https://github.com/stefanik12/transformers-gated-qwen.git@gated-qwen
 ai2-olmo
+transformers==4.57.3
 wandb
+lm_eval[hf]
 # --extra-index-url https://download.pytorch.org/whl/cu129
