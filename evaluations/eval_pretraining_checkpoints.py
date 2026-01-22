@@ -28,11 +28,12 @@ logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser(description="Run SchoolBench evaluation on model checkpoints.")
 parser.add_argument("--repo_id", type=str, help="Target HuggingFace repository ID (e.g., 'swiss-ai/Apertus-70B-2509')")
-parser.add_argument("--topk", type=str, default="1,10,100", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
+parser.add_argument("--topk", type=str, default="1,3,5,10,20", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
 parser.add_argument("--num_samples_per_skill", type=int, default=1000, help="Number of evaluation samples per skill")
 parser.add_argument("--step_interval", type=int, default=10000, help="Number of training steps between evaluated checkpoints")
 parser.add_argument("--only_final_model_eval", action="store_true", help="If set, only the final model will be evaluated.")
 args = parser.parse_args()
+logger.warning("Running with arguments: %s", args)
 
 REPO_ID = args.repo_id
 TOPK_LIST = sorted({int(x) for x in args.topk.split(",") if x.strip()}) if args.topk else []
@@ -118,6 +119,8 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
 
     writer = None
     file_exists = os.path.exists(SAMPLES_CSV)
+    if file_exists:
+        logger.warning(f"Extending samples collectin in: {SAMPLES_CSV}")
 
     with open(SAMPLES_CSV, "a", newline="", encoding="utf-8") as f:
 
@@ -182,6 +185,7 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id):
 def main():
     branches = get_target_branches(REPO_ID, STEP_INTERVAL)
     completed = get_processed_steps(METRICS_CSV)
+    logger.warning("Already completed branches: ", completed)
     data = prepare_data()
 
     all_skills = sorted({p["base"].get("skill", "unknown") for p in data})
@@ -203,6 +207,7 @@ def main():
         fields.append(f"skill.{s}.gap")
 
     for b in branches:
+        logger.warning("Starting evaluating branch %s", b)
         if b["step"] in completed:
             continue
 
