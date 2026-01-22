@@ -31,14 +31,9 @@ def main(model_name, input_path, output_dir):
     results_csv = "lmeval_%s.csv" % model_name.split("/")[-1]
     results_csv = output_dir / results_csv
 
-    # We do NOT write the header yet. We wait for the first result to determine
-    # the full list of decomposed subtasks (e.g. mmlu_abstract_algebra, etc).
-
-
     try:
         
-        # Run LM Eval
-        # Note: When 'mmlu' is passed, lm_eval runs all subtasks.
+        # Load data
         with open(input_path, "r", encoding="utf-8") as f:
             results = json.load(f)
 

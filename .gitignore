@@ -1,4 +1,4 @@
-# Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,linux
+# (Partially) created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,macos,linux
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,macos,linux
 
 ### Linux ###
@@ -72,6 +72,7 @@ Temporary Items
 
 # Data files
 *.json
+*.csv
 
 # Python cache files
 __pycache__/

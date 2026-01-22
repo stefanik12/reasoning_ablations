@@ -4,7 +4,6 @@ import os
 from collections import defaultdict
 from typing import List, Dict, Any
 import json
-from evaluations.generate_dataset import generate_dataset
 from pathlib import Path
 from evaluations.scoring import agg_add, agg_new, agg_finalize
 
