@@ -35,10 +35,13 @@ def eval_tasks(repo_id,
                batch_size,
                tasks,
                only_final_model_eval,
-               keep_cache):
+               cache_dir: str = None,
+               keep_cache: bool = False):
     
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_dir = Path(cache_dir) if cache_dir else None
 
     results_csv = Path(output_dir) / f"lmeval_{repo_id.split('/')[-1]}.csv"
 
@@ -55,7 +58,8 @@ def eval_tasks(repo_id,
             logger.info(f"Skipping step {step} (already processed)"); continue
 
         logger.info(f"Evaluating Step {step} ({branch_name})")
-        step_cache = Path(f"./tmp_cache_step_{b['step']}").resolve()
+        cache = Path(f"./tmp_cache_step_{b['step']}")
+        step_cache = (cache_dir/cache).resolve() if cache_dir else cache.resolve()
         step_cache.mkdir(parents=True, exist_ok=True)
 
         try:
