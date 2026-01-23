@@ -45,16 +45,17 @@ def get_processed_steps(csv_path: Union[str, Path]) -> set:
         return {int(r["step"]) for r in csv.DictReader(f) if r.get("step")}
     
 def configure_logging(level=logging.INFO) -> None:
-    # Root: keep dependencies quiet unless they warn/error
-    root = logging.getLogger()
-    if not root.handlers:  # avoid double handlers if called twice
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        root.addHandler(handler)
-    root.setLevel(logging.WARNING)
+    logging.basicConfig(
+        level=level,
+        format="%(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,   # <-- key on HPC
+    )
 
-    logging.getLogger("evaluations").setLevel(level)
-    logging.getLogger("__main__").setLevel(level)
+    # quiet noisy libs if you want
+    logging.getLogger("transformers").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+    logging.getLogger("lm_eval").setLevel(logging.INFO)
 
 
 

@@ -140,7 +140,7 @@ def eval_skillbench(repo_id: str,
         if b["step"] in completed:
             continue
         
-        logger.info(f"\nStep {b["step"]}")
+        logger.info(f"\nStep {b['step']}")
 
         cache = Path(f"./tmp_cache_step_{b['step']}")
         step_cache = (cache_dir/cache).resolve() if cache_dir else cache.resolve()
