@@ -126,6 +126,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=str, default="auto", help="Batch size for eval")
     parser.add_argument("--tasks", type=str, default="mmlu", help="Comma-separated list of tasks")
     parser.add_argument("--only_final_model_eval", action="store_true", help="If set, only the final model will be evaluated.")
+    parser.add_argument("--cache_dir", type=str, default=None, help="Directory to store temp cache")
     parser.add_argument("--keep_cache", action="store_true", help="If set, keeps cache after running (normally clears by default)")
     
     args = parser.parse_args()
@@ -136,4 +137,5 @@ if __name__ == "__main__":
                batch_size=args.batch_size,
                tasks=args.tasks,
                only_final_model_eval=args.only_final_model_eval,
+               cache_dir=args.cache_dir,
                keep_cache=args.keep_cache)

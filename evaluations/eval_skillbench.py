@@ -99,7 +99,8 @@ def eval_skillbench(repo_id: str,
                     step_interval: int,
                     only_final_model_eval: bool,
                     shuffle: bool,
-                    keep_cache: bool):
+                    cache_dir: str = None,
+                    keep_cache: bool = False):
 
     topk_list = sorted({int(x) for x in topk.split(",") if x.strip()}) if topk else []
 
@@ -107,6 +108,8 @@ def eval_skillbench(repo_id: str,
     output_dir.mkdir(parents=True, exist_ok=True)
     samples_csv = Path(output_dir) / f"schoolbench_{repo_id.split('/')[-1]}_samples.csv"
     metrics_csv = Path(output_dir) / f"schoolbench_{repo_id.split('/')[-1]}_metrics.csv"
+
+    cache_dir = Path(cache_dir) if cache_dir else None
 
     logger.info("========== Generating data ==========")
     branches = get_target_branches(repo_id, step_interval, only_final_model_eval)
@@ -138,7 +141,9 @@ def eval_skillbench(repo_id: str,
             continue
         
         logger.info(f"\nStep {b["step"]}")
-        step_cache = Path(f"./tmp_cache_step_{b['step']}").resolve()
+
+        cache = Path(f"./tmp_cache_step_{b['step']}")
+        step_cache = (cache_dir/cache).resolve() if cache_dir else cache.resolve()
         step_cache.mkdir(parents=True, exist_ok=True)
 
         model = None
@@ -197,6 +202,7 @@ if __name__ == "__main__":
     parser.add_argument("--step_interval", type=int, default=10000, help="Number of training steps between evaluated checkpoints")
     parser.add_argument("--only_final_model_eval", action="store_true", help="If set, only the final model will be evaluated.")
     parser.add_argument("--shuffle", action="store_true", help="If set, data will be shuffled on generation")
+    parser.add_argument("--cache_dir", type=str, default=None, help="Directory to store temp cache")
     parser.add_argument("--keep_cache", action="store_true", help="If set, keeps cache after running (normally clears by default)")
     args = parser.parse_args()
 
@@ -208,4 +214,5 @@ if __name__ == "__main__":
                     step_interval=args.step_interval,
                     only_final_model_eval=args.only_final_model_eval,
                     shuffle=args.shuffle,
+                    cache_dir=args.cache_dir,
                     keep_cache=args.keep_cache)
