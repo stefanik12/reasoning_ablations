@@ -11,13 +11,13 @@ from pathlib import Path
 from tqdm import tqdm
 
 from evaluations.skillbench import generate_dataset
-from evaluations.scoring import score_one, agg_add, agg_new, agg_finalize
-from evaluations.eval_tools import get_processed_steps, get_target_branches, configure_logging
+from evaluations.scoring import score_one
+from evaluations.tools import get_processed_steps, get_target_branches, configure_logging, agg_add, agg_new, agg_finalize
 
 configure_logging()
 logger = logging.getLogger(__name__)
 
-def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id, samples_csv, topk_list):
+def _evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id, samples_csv, topk_list):
     device = next(model.parameters()).device
 
     base_agg, cf_agg = agg_new(topk_list), agg_new(topk_list)
@@ -91,15 +91,15 @@ def evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id, samples_csv
     return metrics
 
 
-def main(repo_id: str,
-         output_dir: str,
-         topk: str,
-         n_samples_per_skill: int,
-         seed: int,
-         step_interval: int,
-         only_final_model_eval: bool,
-         shuffle: bool,
-         keep_cache: bool):
+def eval_skillbench(repo_id: str,
+                    output_dir: str,
+                    topk: str,
+                    n_samples_per_skill: int,
+                    seed: int,
+                    step_interval: int,
+                    only_final_model_eval: bool,
+                    shuffle: bool,
+                    keep_cache: bool):
 
     topk_list = sorted({int(x) for x in topk.split(",") if x.strip()}) if topk else []
 
@@ -159,7 +159,7 @@ def main(repo_id: str,
             ).eval()
             logger.info("Model loaded successfully!")
 
-            m = evaluate_checkpoint(model, tok, data, b["step"], b["name"], samples_csv, topk_list)
+            m = _evaluate_checkpoint(model, tok, data, b["step"], b["name"], samples_csv, topk_list)
 
             logger.info("Saving output")
             write_header = not os.path.exists(metrics_csv)
@@ -182,7 +182,9 @@ def main(repo_id: str,
                 logger.debug("Clearing cache")
                 shutil.rmtree(step_cache, ignore_errors=True)
         
-        logger.info("\nDone")
+    logger.info("\nDone")
+
+    return metrics_csv, samples_csv
 
 
 if __name__ == "__main__":
@@ -198,12 +200,12 @@ if __name__ == "__main__":
     parser.add_argument("--keep_cache", action="store_true", help="If set, keeps cache after running (normally clears by default)")
     args = parser.parse_args()
 
-    main(repo_id=args.repo_id,
-         output_dir=args.output_dir,
-         topk=args.topk,
-         n_samples_per_skill=args.n_samples_per_skill,
-         seed=args.seed,
-         step_interval=args.step_interval,
-         only_final_model_eval=args.only_final_model_eval,
-         shuffle=args.shuffle,
-         keep_cache=args.keep_cache)
+    eval_skillbench(repo_id=args.repo_id,
+                    output_dir=args.output_dir,
+                    topk=args.topk,
+                    n_samples_per_skill=args.n_samples_per_skill,
+                    seed=args.seed,
+                    step_interval=args.step_interval,
+                    only_final_model_eval=args.only_final_model_eval,
+                    shuffle=args.shuffle,
+                    keep_cache=args.keep_cache)

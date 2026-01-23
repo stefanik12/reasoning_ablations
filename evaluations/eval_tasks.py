@@ -6,12 +6,12 @@ import shutil
 import lm_eval
 from pathlib import Path
 
-from evaluations.eval_tools import get_target_branches, get_processed_steps, configure_logging
+from evaluations.tools import get_target_branches, get_processed_steps, configure_logging
 
 configure_logging()
 logger = logging.getLogger(__name__)
 
-def extract_metrics(results_dict: dict) -> dict:
+def _extract_metrics(results_dict: dict) -> dict:
     """
     Flattens lm_eval results into a single dictionary mapping Task -> Score.
     Prioritizes 'acc,none', then 'acc', then 'acc_norm'.
@@ -29,13 +29,13 @@ def extract_metrics(results_dict: dict) -> dict:
     return flat_metrics
 
 
-def main(repo_id,
-         output_dir,
-         step_interval,
-         batch_size,
-         tasks,
-         only_final_model_eval,
-         keep_cache):
+def eval_tasks(repo_id,
+               output_dir,
+               step_interval,
+               batch_size,
+               tasks,
+               only_final_model_eval,
+               keep_cache):
     
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -71,7 +71,7 @@ def main(repo_id,
             logger.info("Processing results")
             # 'results["results"]' contains keys for the group AND all subtasks
             res_dict = results["results"]
-            metric_row = extract_metrics(res_dict)
+            metric_row = _extract_metrics(res_dict)
 
             # Prepare the full row data
             row_data = {"step": step, "branch": branch_name}
@@ -109,6 +109,8 @@ def main(repo_id,
             if not keep_cache:
                 logger.debug("Clearing cache")
                 shutil.rmtree(step_cache, ignore_errors=True)
+    
+    return results_csv
 
 
 if __name__ == "__main__":
@@ -124,10 +126,10 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    main(repo_id=args.repo_id,
-         output_dir=args.output_dir,
-         step_interval=args.step_interval,
-         batch_size=args.batch_size,
-         tasks=args.tasks,
-         only_final_model_eval=args.only_final_model_eval,
-         keep_cache=args.keep_cache)
+    eval_tasks(repo_id=args.repo_id,
+               output_dir=args.output_dir,
+               step_interval=args.step_interval,
+               batch_size=args.batch_size,
+               tasks=args.tasks,
+               only_final_model_eval=args.only_final_model_eval,
+               keep_cache=args.keep_cache)

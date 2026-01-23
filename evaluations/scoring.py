@@ -1,49 +1,8 @@
-# plugins/schoolbench_plugin.py
 from __future__ import annotations
-
-import math
-from dataclasses import dataclass
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Any
 
 import torch
 import torch.nn.functional as F
-
-
-@dataclass
-class _Agg:
-    nll: float = 0.0
-    n_tokens: int = 0
-    topk: Dict[str, Tuple[int, int]] = None
-
-    def __post_init__(self):
-        if self.topk is None:
-            self.topk = {}
-
-def agg_new(topk_list: List[int]) -> _Agg:
-    return _Agg(nll=0.0, n_tokens=0, topk={str(k): (0, 0) for k in topk_list})
-
-def agg_add(agg: _Agg, out: Dict[str, Any], topk_list: List[int]) -> None:
-    agg.nll += float(out.get("nll", 0.0))
-    agg.n_tokens += int(out.get("n_tokens", 0))
-
-    topk_hits = out.get("topk_hits", {}) or {}
-    topk_total = out.get("topk_total", {}) or {}
-
-    for k in topk_list:
-        h = int(topk_hits.get(str(k), 0))
-        t = int(topk_total.get(str(k), 0))
-        hh, tt = agg.topk.get(str(k), (0, 0))
-        agg.topk[str(k)] = (hh + h, tt + t)
-
-def agg_finalize(agg: _Agg, prefix: str, topk_list: List[int]) -> Dict[str, float]:
-    tok = max(agg.n_tokens, 1)
-    out: Dict[str, float] = {f"{prefix}_ppl": float(math.exp(agg.nll / tok)),
-                             f"{prefix}_n_tokens": float(agg.n_tokens)}
-    for k in topk_list:
-        h, t = agg.topk.get(str(k), (0, 0))
-        out[f"{prefix}_top{k}_acc"] = float(h / max(t, 1))
-    return out
-
 
 @torch.inference_mode()
 def score_one(
