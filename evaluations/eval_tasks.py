@@ -58,7 +58,7 @@ def eval_tasks(repo_id,
             logger.info(f"Skipping step {step} (already processed)"); continue
 
         logger.info(f"Evaluating Step {step} ({branch_name})")
-        cache = Path(f"./tmp_cache_step_{b['step']}")
+        cache = Path(f"./tmp_cache_tasks_{repo_id}_step_{b['step']}")
         step_cache = (cache_dir/cache).resolve() if cache_dir else cache.resolve()
         step_cache.mkdir(parents=True, exist_ok=True)
 

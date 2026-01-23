@@ -142,7 +142,7 @@ def eval_skillbench(repo_id: str,
         
         logger.info(f"\nStep {b['step']}")
 
-        cache = Path(f"./tmp_cache_step_{b['step']}")
+        cache = Path(f"./tmp_cache_skillbench_{repo_id}_step_{b['step']}")
         step_cache = (cache_dir/cache).resolve() if cache_dir else cache.resolve()
         step_cache.mkdir(parents=True, exist_ok=True)
 
