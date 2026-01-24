@@ -57,7 +57,11 @@ def configure_logging(level=logging.INFO) -> None:
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
     logging.getLogger("lm_eval").setLevel(logging.INFO)
 
-
+def parse_batch_size(s: str):
+    s = s.strip()
+    if s.startswith("auto"):
+        return s
+    return int(s)
 
 @dataclass
 class _Agg:
