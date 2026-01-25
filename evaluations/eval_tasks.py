@@ -6,7 +6,7 @@ import shutil
 import lm_eval
 from pathlib import Path
 
-from evaluations.tools import get_target_branches, get_processed_steps, configure_logging
+from evaluations.tools import get_target_branches, get_processed_steps, configure_logging, parse_batch_size
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     parser.add_argument("--repo_id", type=str, required=True, help="Target HuggingFace repository ID")
     parser.add_argument("--output_dir", type=str, default="data", help="Directory to output CSV results")
     parser.add_argument("--step_interval", type=int, default=1000, help="Steps between evaluated checkpoints")
-    parser.add_argument("--batch_size", type=str, default="auto", help="Batch size for eval")
+    parser.add_argument("--batch_size", type=parse_batch_size, default="auto", help="Batch size for eval")
     parser.add_argument("--tasks", type=str, default="mmlu", help="Comma-separated list of tasks")
     parser.add_argument("--only_final_model_eval", action="store_true", help="If set, only the final model will be evaluated.")
     parser.add_argument("--cache_dir", type=str, default=None, help="Directory to store temp cache")
