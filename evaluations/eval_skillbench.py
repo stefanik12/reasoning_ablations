@@ -3,6 +3,8 @@ import csv
 import gc
 import logging
 import os
+import random
+import hashlib
 import shutil
 from collections import defaultdict
 import torch
@@ -17,7 +19,36 @@ from evaluations.tools import get_processed_steps, get_target_branches, configur
 configure_logging()
 logger = logging.getLogger(__name__)
 
-def _evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id, samples_csv, topk_list):
+
+def _build_fewshot_prompt(test_prompt: str, test_gold: str, fewshot_examples: list, skill: str, seed: int) -> str:
+    """Construct a few-shot prompt by prepending examples of the same skill."""
+    # Filter examples by skill if possible
+    skill_examples = [ex for ex in fewshot_examples if ex["skill"] == skill]
+    if not skill_examples:
+        skill_examples = fewshot_examples
+
+    # Deterministic hash using hashlib instead of Python's hash()
+    prompt_hash = int(hashlib.md5(test_prompt.encode()).hexdigest(), 16) % (2**31)
+    rng = random.Random(seed + prompt_hash)
+
+    skill_examples = sorted(skill_examples, key=lambda x: x.get("prompt", ""))
+    skill_examples = skill_examples.copy()
+    rng.shuffle(skill_examples)
+
+    fewshot_str = ""
+    used_prompts = set()
+    for ex in skill_examples:
+        ex_prompt = ex.get("prompt", "")
+        ex_gold = ex.get("gold", ex.get("completion", "")).strip()
+        # Skip if duplicate or matches test prompt
+        if ex_prompt and ex_gold and ex_prompt not in used_prompts and ex_prompt != test_prompt:
+            fewshot_str += f"{ex_prompt}{ex_gold}\n\n"
+            used_prompts.add(ex_prompt)
+
+    return fewshot_str + test_prompt
+
+
+def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed, step_num, model_id, samples_csv, topk_list):
     device = next(model.parameters()).device
 
     base_agg, cf_agg = agg_new(topk_list), agg_new(topk_list)
@@ -62,12 +93,18 @@ def _evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id, samples_cs
 
             bg = base.get("gold", base.get("completion", "")).strip()
             if bg:
-                acc("base", skill, base["prompt"], bg)
+                prompt = base["prompt"]
+                if n_fewshot > 0 and fewshot_pool:
+                    prompt = _build_fewshot_prompt(prompt, bg, fewshot_pool.get(skill, []), skill, seed)
+                acc("base", skill, prompt, bg)
 
             if cf:
                 cg = cf.get("gold", cf.get("completion", "")).strip()
                 if cg:
-                    acc("cf", skill, cf["prompt"], cg)
+                    prompt = cf["prompt"]
+                    if n_fewshot > 0 and fewshot_pool:
+                        prompt = _build_fewshot_prompt(prompt, cg, fewshot_pool.get(skill, []), skill, seed)
+                    acc("cf", skill, prompt, cg)
 
     metrics = {"step": step_num, "branch": model_id, "n_samples": len(pairs),
                "base_n_examples": float(base_ex), "cf_n_examples": float(cf_ex)}
@@ -91,10 +128,54 @@ def _evaluate_checkpoint(model, tokenizer, pairs, step_num, model_id, samples_cs
     return metrics
 
 
+def _split_fewshot_pool(data: list, n_fewshot: int, seed: int) -> tuple:
+    """Split data into few-shot pool and test set, grouped by skill."""
+    if n_fewshot <= 0:
+        return {}, data
+
+    rng = random.Random(seed)
+    by_skill = defaultdict(list)
+    for p in data:
+        skill = p["base"].get("skill", "unknown")
+        by_skill[skill].append(p)
+
+    fewshot_pool = {}
+    test_data = []
+
+    for skill in sorted(by_skill.keys()):  # sort keys for determinism
+        items = by_skill[skill]
+        # Sort by prompt for determinism before shuffling
+        items = sorted(items, key=lambda x: x["base"].get("prompt", ""))
+        rng.shuffle(items)
+
+        # Deduplicate by prompt
+        seen_prompts = set()
+        unique_items = []
+        for item in items:
+            prompt = item["base"].get("prompt", "")
+            if prompt not in seen_prompts:
+                seen_prompts.add(prompt)
+                unique_items.append(item)
+
+        # Take n_fewshot examples for the pool, rest for testing
+        pool_items = unique_items[:n_fewshot]
+        test_items = unique_items[n_fewshot:]
+
+        # Build fewshot pool from base examples
+        fewshot_pool[skill] = [item["base"] for item in pool_items]
+        test_data.extend(test_items)
+
+    # Sort then shuffle for determinism
+    test_data = sorted(test_data, key=lambda x: x["base"].get("prompt", ""))
+    rng.shuffle(test_data)
+    return fewshot_pool, test_data
+
+
 def eval_skillbench(repo_id: str,
                     output_dir: str,
                     topk: str,
                     n_samples_per_skill: int,
+                    n_fewshot: int,
                     seed: int,
                     step_interval: int,
                     only_final_model_eval: bool,
@@ -102,12 +183,19 @@ def eval_skillbench(repo_id: str,
                     cache_dir: str = None,
                     keep_cache: bool = False):
 
+    # Set global seeds for reproducibility
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
     topk_list = sorted({int(x) for x in topk.split(",") if x.strip()}) if topk else []
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    samples_csv = Path(output_dir) / f"schoolbench_{repo_id.split('/')[-1]}_samples.csv"
-    metrics_csv = Path(output_dir) / f"schoolbench_{repo_id.split('/')[-1]}_metrics.csv"
+    fewshot_suffix = f"_fewshot{n_fewshot}" if n_fewshot > 0 else ""
+    samples_csv = Path(output_dir) / f"schoolbench_{repo_id.split('/')[-1]}{fewshot_suffix}_samples.csv"
+    metrics_csv = Path(output_dir) / f"schoolbench_{repo_id.split('/')[-1]}{fewshot_suffix}_metrics.csv"
 
     cache_dir = Path(cache_dir) if cache_dir else None
 
@@ -116,7 +204,12 @@ def eval_skillbench(repo_id: str,
     completed = get_processed_steps(metrics_csv)
     data = generate_dataset(n_samples_per_skill, seed=seed, shuffle=shuffle)
 
-    all_skills = sorted({p["base"].get("skill", "unknown") for p in data})
+    # Split into few-shot pool and test data
+    fewshot_pool, test_data = _split_fewshot_pool(data, n_fewshot, seed)
+    if n_fewshot > 0:
+        logger.info(f"Using {n_fewshot}-shot evaluation. Pool: {sum(len(v) for v in fewshot_pool.values())} examples, Test: {len(test_data)} samples")
+
+    all_skills = sorted({p["base"].get("skill", "unknown") for p in test_data})
     fields = [
         "step", "branch",
         "base_ppl", "base_n_tokens", "base_n_examples",
@@ -164,7 +257,7 @@ def eval_skillbench(repo_id: str,
             ).eval()
             logger.info("Model loaded successfully!")
 
-            m = _evaluate_checkpoint(model, tok, data, b["step"], b["name"], samples_csv, topk_list)
+            m = _evaluate_checkpoint(model, tok, test_data, fewshot_pool, n_fewshot, seed, b["step"], b["name"], samples_csv, topk_list)
 
             logger.info("Saving output")
             write_header = not os.path.exists(metrics_csv)
@@ -196,9 +289,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run SchoolBench evaluation on model checkpoints.")
     parser.add_argument("--repo_id", type=str, help="Target HuggingFace repository ID (e.g., 'swiss-ai/Apertus-70B-2509')")
     parser.add_argument("-n", "--n_samples_per_skill", type=int, default=2500, help="Number of samples to draw per skill (note, duplicates will be discarded so returned samples per skill will be less than specified value)")
+    parser.add_argument("--n_fewshot", type=int, default=0, help="Number of few-shot examples to prepend (0 = zero-shot)")
     parser.add_argument("--output_dir", type=str, default="data", help="Directory to output CSV results")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Seed used for random number generation")
-    parser.add_argument("--topk", type=str, default="1,10,100", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
+    parser.add_argument("--topk", type=str, default="1,3,5,10,20", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
     parser.add_argument("--step_interval", type=int, default=10000, help="Number of training steps between evaluated checkpoints")
     parser.add_argument("--only_final_model_eval", action="store_true", help="If set, only the final model will be evaluated.")
     parser.add_argument("--shuffle", action="store_true", help="If set, data will be shuffled on generation")
@@ -210,6 +304,7 @@ if __name__ == "__main__":
                     output_dir=args.output_dir,
                     topk=args.topk,
                     n_samples_per_skill=args.n_samples_per_skill,
+                    n_fewshot=args.n_fewshot,
                     seed=args.seed,
                     step_interval=args.step_interval,
                     only_final_model_eval=args.only_final_model_eval,
