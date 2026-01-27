@@ -115,7 +115,7 @@ def eval_tasks(repo_id,
             # Note: When 'mmlu' is passed, lm_eval runs all subtasks.
             results = lm_eval.simple_evaluate(model="hf", model_args=model_args, tasks=task_input,
                                               device=None if not torch.mps.is_available() else "cpu",
-                                              num_fewshot=5, batch_size=batch_size, log_samples=False, limit=limit)
+                                              num_fewshot=5, batch_size=batch_size, log_samples=True, limit=limit)
 
             # --- Process Results ---
             logger.info("Processing results")
