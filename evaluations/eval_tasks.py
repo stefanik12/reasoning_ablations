@@ -33,42 +33,55 @@ def _extract_metrics(results_dict: dict) -> dict:
 
 
 def _aggregate_choice_probs_from_samples(samples: Any) -> Dict[str, float]:
-    """Mean per-choice vectors from `results.get("samples")` where present."""
+    """Extract mean per-choice logprobs from lm_eval's `results["samples"]`."""
     if not isinstance(samples, dict):
         return {}
 
     out: Dict[str, float] = {}
-    prob_keys = ("choices_probs", "choice_probs", "probs", "probabilities")
-    lprob_keys = ("choices_logprobs", "choice_logprobs", "logprobs", "log_probs", "logprobabilities")
 
     for task, rows in samples.items():
         if not isinstance(rows, list):
             continue
 
-        probs, lprobs = [], []
+        # lm_eval stores per-choice logprobs in "resps" or "filtered_resps"
+        # Format: list of (logprob, is_greedy) tuples per choice
+        logprobs_per_choice: Dict[int, list] = {}
+
         for r in rows:
             if not isinstance(r, dict):
                 continue
-            meta = r.get("metadata") if isinstance(r.get("metadata"), dict) else {}
 
-            def pick(keys):
-                for k in keys:
-                    v = r.get(k, meta.get(k))
-                    if isinstance(v, (list, tuple)) and v and all(isinstance(x, (int, float)) for x in v):
-                        return list(map(float, v))
-                return None
-
-            if (v := pick(prob_keys)) is not None: probs.append(v)
-            if (v := pick(lprob_keys)) is not None: lprobs.append(v)
-
-        for name, vecs in (("choice_prob_mean", probs), ("choice_logprob_mean", lprobs)):
-            if not vecs:
+            # Try "filtered_resps" first (post-processed), then "resps" (raw)
+            resps = r.get("filtered_resps") or r.get("resps")
+            if not isinstance(resps, (list, tuple)):
                 continue
-            n = max((len(v) for v in vecs), default=0)
-            for i in range(n):
-                vals = [v[i] for v in vecs if i < len(v)]
-                if vals:
-                    out[f"{name}__{task}__{i}"] = sum(vals) / len(vals)
+
+            for i, resp in enumerate(resps):
+                # Each resp is typically (logprob, is_greedy) or just logprob
+                if isinstance(resp, (list, tuple)) and len(resp) >= 1:
+                    val = resp[0]
+                elif isinstance(resp, (int, float)):
+                    val = resp
+                else:
+                    continue
+
+                if isinstance(val, (int, float)):
+                    logprobs_per_choice.setdefault(i, []).append(float(val))
+
+        # Compute mean logprob per choice
+        for i, vals in sorted(logprobs_per_choice.items()):
+            if vals:
+                out[f"logprob_mean__{task}__choice_{i}"] = sum(vals) / len(vals)
+
+        # Also compute softmax-normalized probs from mean logprobs
+        if logprobs_per_choice:
+            import math
+            mean_logprobs = {i: sum(v)/len(v) for i, v in logprobs_per_choice.items()}
+            max_lp = max(mean_logprobs.values())
+            exp_vals = {i: math.exp(lp - max_lp) for i, lp in mean_logprobs.items()}
+            total = sum(exp_vals.values())
+            for i in sorted(exp_vals.keys()):
+                out[f"prob_mean__{task}__choice_{i}"] = exp_vals[i] / total if total > 0 else 0.0
 
     return out
 
@@ -116,6 +129,13 @@ def eval_tasks(repo_id,
             results = lm_eval.simple_evaluate(model="hf", model_args=model_args, tasks=task_input,
                                               device=None if not torch.mps.is_available() else "cpu",
                                               num_fewshot=5, batch_size=batch_size, log_samples=True, limit=limit)
+
+            # Log first sample keys for debugging
+            samples = results.get("samples", {})
+            for task, rows in samples.items():
+                if rows and isinstance(rows[0], dict):
+                    logger.info(f"Sample keys for {task}: {list(rows[0].keys())}")
+                break
 
             # --- Process Results ---
             logger.info("Processing results")
