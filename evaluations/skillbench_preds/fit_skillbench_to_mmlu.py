@@ -65,7 +65,12 @@ def model_df(root, model, join_on_branch):
     sb_csv, lm_csv = resolve_paths(root, model)
     sb = pd.read_csv(sb_csv); lm = pd.read_csv(lm_csv)
     key = ["step", "branch"] if join_on_branch and "branch" in sb.columns and "branch" in lm.columns else ["step"]
-    df = pd.merge(sb, lm, on = key, how = "inner"); df["model"] = model
+    if key[0] in sb:
+        df = pd.merge(sb, lm, on = key, how = "inner")
+    else:
+        df = pd.concat([sb, lm], axis=1)
+
+    df["model"] = model
     print(f"Loaded {model}: {os.path.basename(sb_csv)} + {os.path.basename(lm_csv)} -> rows = {len(df)}")
     return df
 

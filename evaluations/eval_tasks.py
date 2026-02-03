@@ -32,8 +32,40 @@ def _extract_metrics(results_dict: dict) -> dict:
     return flat_metrics
 
 
+def _coerce_choice_index(val: Any) -> int | None:
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, (list, tuple)) and val:
+        return _coerce_choice_index(val[0])
+    if isinstance(val, str):
+        s = val.strip()
+        if s.isdigit():
+            return int(s)
+        if len(s) == 1 and s.lower() in "abcd":
+            return ord(s.lower()) - ord("a")
+    return None
+
+
+def _extract_correct_choice_index(row: Dict[str, Any]) -> int | None:
+    for key in ("gold", "answer", "label", "target"):
+        if key in row:
+            idx = _coerce_choice_index(row.get(key))
+            if idx is not None:
+                return idx
+
+    doc = row.get("doc")
+    if isinstance(doc, dict):
+        for key in ("gold", "answer", "label", "target"):
+            idx = _coerce_choice_index(doc.get(key))
+            if idx is not None:
+                return idx
+    return None
+
+
 def _aggregate_choice_probs_from_samples(samples: Any) -> Dict[str, float]:
-    """Extract mean per-choice logprobs from lm_eval's `results["samples"]`."""
+    """Extract mean correct-choice logprobs/probs from lm_eval's `results["samples"]`."""
     if not isinstance(samples, dict):
         return {}
 
@@ -45,7 +77,8 @@ def _aggregate_choice_probs_from_samples(samples: Any) -> Dict[str, float]:
 
         # lm_eval stores per-choice logprobs in "resps" or "filtered_resps"
         # Format: list of (logprob, is_greedy) tuples per choice
-        logprobs_per_choice: Dict[int, list] = {}
+        correct_logprobs: list[float] = []
+        correct_probs: list[float] = []
 
         for r in rows:
             if not isinstance(r, dict):
@@ -56,7 +89,8 @@ def _aggregate_choice_probs_from_samples(samples: Any) -> Dict[str, float]:
             if not isinstance(resps, (list, tuple)):
                 continue
 
-            for i, resp in enumerate(resps):
+            vals: list[float] = []
+            for resp in resps:
                 # Each resp is typically (logprob, is_greedy) or just logprob
                 if isinstance(resp, (list, tuple)) and len(resp) >= 1:
                     val = resp[0]
@@ -66,22 +100,26 @@ def _aggregate_choice_probs_from_samples(samples: Any) -> Dict[str, float]:
                     continue
 
                 if isinstance(val, (int, float)):
-                    logprobs_per_choice.setdefault(i, []).append(float(val))
+                    vals.append(float(val))
 
-        # Compute mean logprob per choice
-        for i, vals in sorted(logprobs_per_choice.items()):
+            correct_idx = _extract_correct_choice_index(r)
+            if correct_idx is None or correct_idx < 0 or correct_idx >= len(vals):
+                continue
+
+            correct_logprobs.append(vals[correct_idx])
+
             if vals:
-                out[f"logprob_mean__{task}__choice_{i}"] = sum(vals) / len(vals)
+                import math
+                max_lp = max(vals)
+                exp_vals = [math.exp(v - max_lp) for v in vals]
+                total = sum(exp_vals)
+                if total > 0:
+                    correct_probs.append(exp_vals[correct_idx] / total)
 
-        # Also compute softmax-normalized probs from mean logprobs
-        if logprobs_per_choice:
-            import math
-            mean_logprobs = {i: sum(v)/len(v) for i, v in logprobs_per_choice.items()}
-            max_lp = max(mean_logprobs.values())
-            exp_vals = {i: math.exp(lp - max_lp) for i, lp in mean_logprobs.items()}
-            total = sum(exp_vals.values())
-            for i in sorted(exp_vals.keys()):
-                out[f"prob_mean__{task}__choice_{i}"] = exp_vals[i] / total if total > 0 else 0.0
+        if correct_logprobs:
+            out[f"logprob_mean__{task}__choice_correct"] = sum(correct_logprobs) / len(correct_logprobs)
+        if correct_probs:
+            out[f"prob_mean__{task}__choice_correct"] = sum(correct_probs) / len(correct_probs)
 
     return out
 
