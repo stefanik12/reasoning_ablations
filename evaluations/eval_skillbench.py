@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from evaluations.skillbench import generate_dataset
 from evaluations.scoring import score_one
-from evaluations.tools import get_processed_steps, get_target_branches, configure_logging, agg_add, agg_new, agg_finalize
+from evaluations.tools import get_processed_steps, get_target_branches, configure_logging, agg_add, agg_new, agg_finalize, agg_add_paired_match
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -52,10 +52,12 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
     device = next(model.parameters()).device
 
     base_agg, cf_agg = agg_new(topk_list), agg_new(topk_list)
+    paired_agg = agg_new(topk_list)  # For tracking paired matches
     base_ex = cf_ex = 0
 
     skills = defaultdict(lambda: {
         "base": agg_new(topk_list), "cf": agg_new(topk_list),
+        "paired": agg_new(topk_list),  # For per-skill paired tracking
         "base_ex": 0, "cf_ex": 0
     })
 
@@ -86,17 +88,21 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
             else:
                 agg_add(cf_agg, out, topk_list); cf_ex += 1
                 agg_add(skills[skill]["cf"], out, topk_list); skills[skill]["cf_ex"] += 1
+            return out
 
         for p in tqdm(pairs, desc=f"Scoring model for step {step_num}"):
             base, cf = p["base"], p["cf"]
             skill = base.get("skill", "unknown")
+
+            base_out = None
+            cf_out = None
 
             bg = base.get("gold", base.get("completion", "")).strip()
             if bg:
                 prompt = base["prompt"]
                 if n_fewshot > 0 and fewshot_pool:
                     prompt = _build_fewshot_prompt(prompt, bg, fewshot_pool.get(skill, []), skill, seed)
-                acc("base", skill, prompt, bg)
+                base_out = acc("base", skill, prompt, bg)
 
             if cf:
                 cg = cf.get("gold", cf.get("completion", "")).strip()
@@ -104,12 +110,25 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
                     prompt = cf["prompt"]
                     if n_fewshot > 0 and fewshot_pool:
                         prompt = _build_fewshot_prompt(prompt, cg, fewshot_pool.get(skill, []), skill, seed)
-                    acc("cf", skill, prompt, cg)
+                    cf_out = acc("cf", skill, prompt, cg)
+
+            # Track paired matches when both base and cf have valid outputs
+            if base_out is not None and cf_out is not None:
+                base_correct = base_out.get("top1_correct", False)
+                cf_correct = cf_out.get("top1_correct", False)
+                agg_add_paired_match(paired_agg, base_correct, cf_correct)
+                agg_add_paired_match(skills[skill]["paired"], base_correct, cf_correct)
 
     metrics = {"step": step_num, "branch": model_id, "n_samples": len(pairs),
                "base_n_examples": float(base_ex), "cf_n_examples": float(cf_ex)}
     metrics.update(agg_finalize(base_agg, "base", topk_list))
     metrics.update(agg_finalize(cf_agg, "cf", topk_list))
+    
+    # Add paired match metrics
+    if paired_agg.paired_total > 0:
+        metrics["paired_match_rate"] = float(paired_agg.paired_matches / paired_agg.paired_total)
+        metrics["paired_matches"] = float(paired_agg.paired_matches)
+        metrics["paired_total"] = float(paired_agg.paired_total)
 
     for skill, s in skills.items():
         metrics[f"skill.{skill}.base_n_examples"] = float(s["base_ex"])
@@ -124,6 +143,12 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
             metrics.get(f"skill.{skill}.cf_ppl", 0.0) - metrics.get(f"skill.{skill}.base_ppl", 0.0)
             if s["cf_ex"] else 0.0
         )
+        
+        # Add per-skill paired match metrics
+        if s["paired"].paired_total > 0:
+            metrics[f"skill.{skill}.paired_match_rate"] = float(s["paired"].paired_matches / s["paired"].paired_total)
+            metrics[f"skill.{skill}.paired_matches"] = float(s["paired"].paired_matches)
+            metrics[f"skill.{skill}.paired_total"] = float(s["paired"].paired_total)
 
     return metrics
 
@@ -215,6 +240,7 @@ def eval_skillbench(repo_id: str,
         "base_ppl", "base_n_tokens", "base_n_examples",
         "cf_ppl", "cf_n_tokens", "cf_n_examples",
         "n_samples",
+        "paired_match_rate", "paired_matches", "paired_total",
     ]
     for k in topk_list:
         fields += [f"base_top{k}_acc", f"cf_top{k}_acc"]
@@ -226,7 +252,7 @@ def eval_skillbench(repo_id: str,
         for k in topk_list:
             fields += [f"skill.{s}.base_top{k}_acc", f"skill.{s}.cf_top{k}_acc"]
         fields.append(f"skill.{s}.gap")
-
+        fields += [f"skill.{s}.paired_match_rate", f"skill.{s}.paired_matches", f"skill.{s}.paired_total"]
 
     logger.info("\n========== Scoring model ==========")
     for b in branches:

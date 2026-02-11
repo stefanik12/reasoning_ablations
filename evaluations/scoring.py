@@ -38,7 +38,8 @@ def score_one(
                                "most_likely": "",
                                "topn": {},
                                "topk_hits": {str(k): 0 for k in topk_list},
-                               "topk_total": {str(k): 0 for k in topk_list},}
+                               "topk_total": {str(k): 0 for k in topk_list},
+                               "top1_correct": False}
 
         return out
 
@@ -65,10 +66,10 @@ def score_one(
 
     if idx.numel() == 0:
         out: Dict[str, Any] = {"nll": 0.0, "n_tokens": 0,
-                               "expected": gold.strip(), "most_likely": "", "topn": {}}
-        for k in topk_list:
-            out[f"top{k}_hits"] = 0
-            out[f"top{k}_total"] = 0
+                               "expected": gold.strip(), "most_likely": "", "topn": {},
+                               "topk_hits": {str(k): 0 for k in topk_list},
+                               "topk_total": {str(k): 0 for k in topk_list},
+                               "top1_correct": False}
         return out
 
     allowed = set(mask_chars_only)
@@ -89,7 +90,8 @@ def score_one(
                                "most_likely": "",
                                "topn": {},
                                "topk_hits": {str(k): 0 for k in topk_list},
-                               "topk_total": {str(k): 0 for k in topk_list}}
+                               "topk_total": {str(k): 0 for k in topk_list},
+                               "top1_correct": False}
         return out
 
     keep_idx = torch.tensor(keep, device=shift_labels.device, dtype=torch.long)
@@ -106,13 +108,23 @@ def score_one(
     topn: Dict[str, List[List[str]]] = {}
     topk_hits: Dict[str, int] = {}
     topk_total: Dict[str, int] = {}
+    
+    # Check if top-1 prediction is correct (for pair matching metric)
+    # Use keep_mask to be consistent with filtered tokens
+    top1_correct = False
+    if n_tokens > 0:
+        topk_ids_top1 = torch.topk(shift_logits, k=1, dim=-1).indices
+        hits_top1 = ((topk_ids_top1 == shift_labels.unsqueeze(-1)) & keep_mask.unsqueeze(-1)).any(dim=-1).sum().item()
+        top1_correct = (hits_top1 == n_tokens)  # All tokens must match for sequence-level correctness
+    
     out: Dict[str, Any] = {"nll": nll,
                            "n_tokens": n_tokens,
                            "expected": gold.strip(),
                            "most_likely": most_likely_seq,
                            "topn": topn,
                            "topk_hits": topk_hits,
-                           "topk_total": topk_total}
+                           "topk_total": topk_total,
+                           "top1_correct": top1_correct}
     for k in topk_list:
         if n_tokens == 0:
             topk_hits[str(k)] = 0
