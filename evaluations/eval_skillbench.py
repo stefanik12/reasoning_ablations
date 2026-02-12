@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from pathlib import Path
 from tqdm import tqdm
 
-from evaluations.skillbench import generate_dataset
+from evaluations.skillbench import generate_dataset, SKILL_BASE_ACCURACY
 from evaluations.scoring import score_one
 from evaluations.tools import get_processed_steps, get_target_branches, configure_logging, agg_add, agg_new, agg_finalize, agg_add_paired_match
 
@@ -85,9 +85,11 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
             if kind == "base":
                 agg_add(base_agg, out, topk_list); base_ex += 1
                 agg_add(skills[skill]["base"], out, topk_list); skills[skill]["base_ex"] += 1
+                skills[skill]["base_accuracy"] = base.get("meta", {}).get("base_accuracy", SKILL_BASE_ACCURACY.get(skill, 0.0))
             else:
                 agg_add(cf_agg, out, topk_list); cf_ex += 1
                 agg_add(skills[skill]["cf"], out, topk_list); skills[skill]["cf_ex"] += 1
+                skills[skill]["base_accuracy"] = cf.get("meta", {}).get("base_accuracy", skills[skill].get("base_accuracy", SKILL_BASE_ACCURACY.get(skill, 0.0)))
             return out
 
         for p in tqdm(pairs, desc=f"Scoring model for step {step_num}"):
@@ -120,15 +122,15 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
                 agg_add_paired_match(skills[skill]["paired"], base_correct, cf_correct)
 
     metrics = {"step": step_num, "branch": model_id, "n_samples": len(pairs),
-               "base_n_examples": float(base_ex), "cf_n_examples": float(cf_ex)}
+               "base_n_examples": base_ex, "cf_n_examples": cf_ex}
     metrics.update(agg_finalize(base_agg, "base", topk_list))
     metrics.update(agg_finalize(cf_agg, "cf", topk_list))
-    
+
     # Add paired match metrics
-    if paired_agg.paired_total > 0:
-        metrics["paired_match_rate"] = float(paired_agg.paired_matches / paired_agg.paired_total)
-        metrics["paired_matches"] = float(paired_agg.paired_matches)
-        metrics["paired_total"] = float(paired_agg.paired_total)
+    assert paired_agg.paired_total == len(pairs) == cf_ex, "Not all cf samples were paired with base samples"
+    metrics["paired_match_rate"] = paired_agg.paired_matches / len(pairs)
+    metrics["paired_matches"] = paired_agg.paired_matches
+    metrics["paired_total"] = paired_agg.paired_total
 
     for skill, s in skills.items():
         metrics[f"skill.{skill}.base_n_examples"] = float(s["base_ex"])
@@ -139,7 +141,17 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
         metrics.update(bm)
         metrics.update(cm)
 
-        metrics[f"skill.{skill}.gap"] = (
+        # Compute adjusted accuracies (subtract base/chance level)
+        base_chance = s.get("base_accuracy", SKILL_BASE_ACCURACY.get(skill, 0.0))
+        for k in topk_list:
+            base_acc_key = f"skill.{skill}.base_top{k}_acc"
+            cf_acc_key = f"skill.{skill}.cf_top{k}_acc"
+            metrics[f"skill.{skill}.base_top{k}_acc_adjusted"] = metrics[base_acc_key] - base_chance
+            metrics[f"skill.{skill}.cf_top{k}_acc_adjusted"] = metrics[cf_acc_key] - base_chance
+
+        metrics[f"skill.{skill}.base_chance"] = base_chance
+
+        metrics[f"skill.{skill}.ppl_gap"] = (
             metrics.get(f"skill.{skill}.cf_ppl", 0.0) - metrics.get(f"skill.{skill}.base_ppl", 0.0)
             if s["cf_ex"] else 0.0
         )
@@ -250,7 +262,8 @@ def eval_skillbench(repo_id: str,
             f"skill.{s}.cf_ppl", f"skill.{s}.cf_n_tokens", f"skill.{s}.cf_n_examples",
         ]
         for k in topk_list:
-            fields += [f"skill.{s}.base_top{k}_acc", f"skill.{s}.cf_top{k}_acc"]
+            fields += [f"skill.{s}.base_top{k}_acc", f"skill.{s}.cf_top{k}_acc",
+                       f"skill.{s}.base_top{k}_acc_adjusted", f"skill.{s}.cf_top{k}_acc_adjusted"]
         fields.append(f"skill.{s}.gap")
         fields += [f"skill.{s}.paired_match_rate", f"skill.{s}.paired_matches", f"skill.{s}.paired_total"]
 
@@ -314,9 +327,9 @@ def eval_skillbench(repo_id: str,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run SchoolBench evaluation on model checkpoints.")
     parser.add_argument("--repo_id", type=str, help="Target HuggingFace repository ID (e.g., 'swiss-ai/Apertus-70B-2509')")
+    parser.add_argument("--output_dir", type=str, help="Directory to output CSV results")
     parser.add_argument("-n", "--n_samples_per_skill", type=int, default=2500, help="Number of samples to draw per skill (note, duplicates will be discarded so returned samples per skill will be less than specified value)")
     parser.add_argument("--n_fewshot", type=int, default=0, help="Number of few-shot examples to prepend (0 = zero-shot)")
-    parser.add_argument("--output_dir", type=str, default="data", help="Directory to output CSV results")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Seed used for random number generation")
     parser.add_argument("--topk", type=str, default="1,3,5,10,20", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
     parser.add_argument("--step_interval", type=int, default=10000, help="Number of training steps between evaluated checkpoints")
@@ -325,6 +338,8 @@ if __name__ == "__main__":
     parser.add_argument("--cache_dir", type=str, default=None, help="Directory to store temp cache")
     parser.add_argument("--keep_cache", action="store_true", help="If set, keeps cache after running (normally clears by default)")
     args = parser.parse_args()
+
+    print("Running with arguments: %s" % args)
 
     eval_skillbench(repo_id=args.repo_id,
                     output_dir=args.output_dir,

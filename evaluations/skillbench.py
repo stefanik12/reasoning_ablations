@@ -65,6 +65,7 @@ from tqdm import tqdm
 
 class Skill(Protocol):
     name: str
+    BASE_ACCURACY: float  # chance-level accuracy for this skill
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]: ...
 
 def _choice(rng: random.Random, xs: List[Any]) -> Any:
@@ -112,6 +113,9 @@ class RelationalReasoningSkill:
     """
 
     name = "relational_reasoning"
+    # query="random" among min/max/compare; compare is 50% YES/NO, min/max depend on chain
+    # Weighted average approximation: ~40% (conservative estimate for mixed queries)
+    BASE_ACCURACY = 0.40
 
     def __init__(
         self,
@@ -212,6 +216,8 @@ class RuleInductionSkill:
     """
 
     name = "rule_induction"
+    # 3 symbols (X, Y, Z), uniform → 1/3
+    BASE_ACCURACY = 1/3
 
     def __init__(
         self,
@@ -281,6 +287,8 @@ class WorkingMemoryMaintenanceSkill:
     """
 
     name = "working_memory_maintenance"
+    # 10 digits (0-9), ask for kth → 1/10
+    BASE_ACCURACY = 0.10
 
     def __init__(self, alphabet: Optional[List[str]] = None, seq_len: int = 5, ask_index: int = 3):
         self.alphabet = alphabet or list("0123456789")
@@ -321,6 +329,8 @@ class WorkingMemoryManipulationSkill:
     """
 
     name = "working_memory_manipulation"
+    # Sequence reversal, exponentially many outputs → effectively 0
+    BASE_ACCURACY = 0.0
 
     def __init__(self, alphabet: Optional[List[str]] = None, seq_len: int = 4):
         self.alphabet = alphabet or list("0123456789")
@@ -361,6 +371,8 @@ class QuantitativeReasoningSkill:
     """
 
     name = "quantitative_reasoning"
+    # 2 labels, no equal allowed → 50%
+    BASE_ACCURACY = 0.50
 
     def __init__(
         self,
@@ -423,6 +435,8 @@ class CognitiveControlInhibitionSkill:
     """
 
     name = "cognitive_control_inhibition"
+    # 6 symbols with derangement → 1/6
+    BASE_ACCURACY = 1/6
 
     def __init__(
         self,
@@ -491,6 +505,8 @@ class SymbolRecognitionSkill:
     """
 
     name = "symbol_recognition"
+    # YES/NO membership → 50%
+    BASE_ACCURACY = 0.50
 
     def __init__(
         self,
@@ -537,6 +553,8 @@ class VocabularySkill:
     """
 
     name = "vocabulary"
+    # 4-option MC (A/B/C/D) → 25%
+    BASE_ACCURACY = 0.25
 
     def __init__(
         self,
@@ -596,6 +614,8 @@ class PhonologicalAwarenessSkill:
     """
 
     name = "phonological_awareness"
+    # 3-option MC → 1/3
+    BASE_ACCURACY = 1/3
 
     def __init__(
         self,
@@ -655,6 +675,8 @@ class InstructionComprehensionSkill:
     """
 
     name = "instruction_comprehension"
+    # YES/NO → 50%
+    BASE_ACCURACY = 0.50
 
     def __init__(
         self,
@@ -701,6 +723,8 @@ class FineMotorProxySkill:
     """
 
     name = "fine_motor_proxy"
+    # Coordinates (x,y), many possible → effectively 0
+    BASE_ACCURACY = 0.0
 
     def __init__(
         self,
@@ -752,22 +776,23 @@ class MetacognitiveSelfEstimationSkill:
     """
 
     name = "metacognitive_self_estimation"
+    # Integer 0-11 (12 possible), uniform → 1/12
+    BASE_ACCURACY = 1/12
 
     def __init__(
         self,
         list_of_skills: list = ["relational_reasoning",
-                        "rule_induction",
-                        "working_memory_maintenance",
-                        "working_memory_manipulation",
-                        "quantitative_reasoning",
-                        "cognitive_control_inhibition",
-                        "symbol_recognition",
-                        "vocabulary",
-                        "phonological_awareness",
-                        "instruction_comprehension",
-                        "fine_motor_proxy",
-                        # "social_emotional_awareness": 5,
-                        "metacognitive_self_estimation"]
+                                "rule_induction",
+                                "working_memory_maintenance",
+                                "working_memory_manipulation",
+                                "quantitative_reasoning",
+                                "cognitive_control_inhibition",
+                                "symbol_recognition",
+                                "vocabulary",
+                                "phonological_awareness",
+                                "instruction_comprehension",
+                                "fine_motor_proxy",
+                                "metacognitive_self_estimation"]
     ):
         self.totals = list_of_skills
 
@@ -940,6 +965,25 @@ class BenchmarkBuilder:
             self.rng.shuffle(items)
         return items
 
+
+# -------------------------
+# Base accuracy mapping
+# -------------------------
+
+SKILL_BASE_ACCURACY = {
+    RelationalReasoningSkill.name: RelationalReasoningSkill.BASE_ACCURACY,
+    RuleInductionSkill.name: RuleInductionSkill.BASE_ACCURACY,
+    WorkingMemoryMaintenanceSkill.name: WorkingMemoryMaintenanceSkill.BASE_ACCURACY,
+    WorkingMemoryManipulationSkill.name: WorkingMemoryManipulationSkill.BASE_ACCURACY,
+    QuantitativeReasoningSkill.name: QuantitativeReasoningSkill.BASE_ACCURACY,
+    CognitiveControlInhibitionSkill.name: CognitiveControlInhibitionSkill.BASE_ACCURACY,
+    SymbolRecognitionSkill.name: SymbolRecognitionSkill.BASE_ACCURACY,
+    VocabularySkill.name: VocabularySkill.BASE_ACCURACY,
+    PhonologicalAwarenessSkill.name: PhonologicalAwarenessSkill.BASE_ACCURACY,
+    InstructionComprehensionSkill.name: InstructionComprehensionSkill.BASE_ACCURACY,
+    FineMotorProxySkill.name: FineMotorProxySkill.BASE_ACCURACY,
+    MetacognitiveSelfEstimationSkill.name: MetacognitiveSelfEstimationSkill.BASE_ACCURACY,
+}
 
 # -------------------------
 # Shortcut identifiers
@@ -1733,7 +1777,7 @@ def generate_dataset(n_samples_per_skill: int = 2500, output_path: str = None, s
 
     # 1) Build a dataset using BenchmarkBuilder
     spec = BenchmarkSpec(
-        seed=seed,       
+        seed=seed,
         n_per_skill={
             "relational_reasoning": n_samples_per_skill,
             "rule_induction": n_samples_per_skill,
@@ -1776,12 +1820,12 @@ def generate_dataset(n_samples_per_skill: int = 2500, output_path: str = None, s
         if cf_item["meta"].get("cf_edit") is not None and pair not in pairs:
             pairs.append(pair)
 
-    
+
     # 4) (Optional) Save output
     if output_path:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(path, "w") as f:
             json.dump(pairs, f, indent=2)
 
