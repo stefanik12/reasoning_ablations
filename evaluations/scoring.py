@@ -10,8 +10,8 @@ def score_one(
     tokenizer,
     prompt: str,
     gold: str,
-    topk_list: List[int],
     device: torch.device,
+    label_tokens: List[str],
     mask_chars_only: str = " ,()",
 ) -> Dict[str, Any]:
     """
@@ -32,23 +32,17 @@ def score_one(
     prompt_len = enc_prompt["input_ids"].shape[1]
     T = input_ids.shape[1]
     if T <= prompt_len:
-        out: Dict[str, Any] = {"nll": 0.0,
-                               "n_tokens": 0,
-                               "expected": gold.strip(),
-                               "most_likely": "",
-                               "topn": {},
-                               "topk_hits": {str(k): 0 for k in topk_list},
-                               "topk_total": {str(k): 0 for k in topk_list},
-                               "top1_correct": False}
-
-        return out
+        raise ValueError("No label tokens found (prompt length >= total input length)")
 
     labels = input_ids.clone()
     labels[:, :prompt_len] = -100
     # labels[:, prompt_len+1:] = -100  # aggregating over all label tokens
 
     # Use Autocast for compatibility with Apertus/Olmo layers (xIELU etc)
-    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+    if device.type == "cuda":
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            logits = model(input_ids=input_ids, attention_mask=attn_mask).logits
+    else:
         logits = model(input_ids=input_ids, attention_mask=attn_mask).logits
 
     shift_logits = logits[:, :-1, :]
@@ -66,17 +60,18 @@ def score_one(
 
     if idx.numel() == 0:
         out: Dict[str, Any] = {"nll": 0.0, "n_tokens": 0,
-                               "expected": gold.strip(), "most_likely": "", "topn": {},
-                               "topk_hits": {str(k): 0 for k in topk_list},
-                               "topk_total": {str(k): 0 for k in topk_list},
-                               "top1_correct": False}
+                               "expected": gold.strip(), "most_likely": "",
+                               "top1_hits": 0,
+                               "top1_total": 0,
+                               "top1_correct": False
+                               }
         return out
 
     allowed = set(mask_chars_only)
 
     # Filter out non-informative expected tokens by decoded text
     keep = []
-    for p in idx.tolist():
+    for p in idx:
         tid = int(shift_labels[0, p].item())
         s = tokenizer.decode([tid], clean_up_tokenization_spaces=False)
         if s and (set(s) <= allowed):
@@ -88,9 +83,8 @@ def score_one(
                                "n_tokens": 0,
                                "expected": gold.strip(),
                                "most_likely": "",
-                               "topn": {},
-                               "topk_hits": {str(k): 0 for k in topk_list},
-                               "topk_total": {str(k): 0 for k in topk_list},
+                               "top1_hits": 0,
+                               "top1_total": 0,
                                "top1_correct": False}
         return out
 
@@ -101,45 +95,26 @@ def score_one(
     nll = float((loss * keep_mask).sum().item())
     n_tokens = int(keep_mask.sum().item())
 
-    # Most-likely sequence across kept label positions
-    ml_ids = shift_logits[0, keep_idx].argmax(dim=-1).tolist()
-    most_likely_seq = tokenizer.convert_tokens_to_string([tokenizer.convert_ids_to_tokens(i) for i in ml_ids]).strip()
+    # Most-likely sequence across kept label positions (top-1 / argmax)
+    pred_ids = shift_logits[0, keep_idx].argmax(dim=-1)
 
-    topn: Dict[str, List[List[str]]] = {}
-    topk_hits: Dict[str, int] = {}
-    topk_total: Dict[str, int] = {}
-    
-    # Check if top-1 prediction is correct (for pair matching metric)
-    # Use keep_mask to be consistent with filtered tokens
-    top1_correct = False
-    if n_tokens > 0:
-        topk_ids_top1 = torch.topk(shift_logits, k=1, dim=-1).indices
-        hits_top1 = ((topk_ids_top1 == shift_labels.unsqueeze(-1)) & keep_mask.unsqueeze(-1)).any(dim=-1).sum().item()
-        top1_correct = (hits_top1 == n_tokens)  # All tokens must match for sequence-level correctness
-    
+    gold_ids = shift_labels[0, keep_idx]
+    expected_seq = tokenizer.batch_decode(gold_ids, clean_up_tokenization_spaces=False)
+    true_seq = tokenizer.batch_decode(pred_ids, clean_up_tokenization_spaces=False)
+
+    # Top-1 aggregation on kept positions only
+    top1_total = int(n_tokens)
+
+    assert top1_total > 0, "Less than 1 expected (label) token in sample with gold '%s' prompt '%s'." % (gold, prompt)
+    # assess the match token-elementwise with stripped spaces
+    top1_hits = sum(exp_one.strip() == pred_one.strip() for exp_one, pred_one in zip(expected_seq, true_seq))
+    top1_correct = top1_hits == top1_total
+
     out: Dict[str, Any] = {"nll": nll,
                            "n_tokens": n_tokens,
-                           "expected": gold.strip(),
-                           "most_likely": most_likely_seq,
-                           "topn": topn,
-                           "topk_hits": topk_hits,
-                           "topk_total": topk_total,
+                           "expected": expected_seq,
+                           "most_likely": true_seq,
+                           "top1_hits": top1_hits,
+                           "top1_total": top1_total,
                            "top1_correct": top1_correct}
-    for k in topk_list:
-        if n_tokens == 0:
-            topk_hits[str(k)] = 0
-            topk_total[str(k)] = 0
-            topn[str(k)] = []
-            continue
-
-        topk_ids = torch.topk(shift_logits, k=k, dim=-1).indices  # [1,T-1,k]
-        hits = ((topk_ids == shift_labels.unsqueeze(-1)) & mask.unsqueeze(-1)).any(dim=-1).sum().item()
-
-        topk_hits[str(k)] = int(hits)
-        topk_total[str(k)] = int(n_tokens)
-
-        # Aggregate top-n across ALL scored (gold) positions: shape [n_tokens, k]
-        ids = torch.topk(shift_logits[0, idx], k=k, dim=-1).indices.tolist()
-        topn[str(k)] = [[tokenizer.convert_ids_to_tokens(i) for i in row] for row in ids]
-
     return out
