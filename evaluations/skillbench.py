@@ -67,6 +67,8 @@ class Skill(Protocol):
     name: str
     BASE_ACCURACY: float  # chance-level accuracy for this skill
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]: ...
+    def get_label_tokens(self, prompt: str) -> List[str]: ...
+
 
 def _choice(rng: random.Random, xs: List[Any]) -> Any:
     return xs[rng.randrange(len(xs))]
@@ -128,6 +130,13 @@ class RelationalReasoningSkill:
         self.relation = relation
         self.query = query
         self.chain_len = chain_len
+
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        if "TRUE/FALSE" in prompt:
+            return [" TRUE", " FALSE"]
+        if "YES/NO" in prompt:
+            return [" YES", " NO"]
+        return [" " + s for s in self.symbols]
 
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -229,6 +238,9 @@ class RuleInductionSkill:
         self.op = op
         self.n_examples = n_examples
 
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        return [" " + s for s in self.symbols]
+
     def _make_hidden_op(self, rng: random.Random):
         # Hidden operator defined as a cyclic table under a random permutation:
         # This ensures learnable regularity (like a “pattern”) without importing arithmetic semantics.
@@ -295,6 +307,9 @@ class WorkingMemoryMaintenanceSkill:
         self.seq_len = seq_len
         self.ask_index = ask_index
 
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        return [" " + s for s in self.alphabet]
+
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for _ in range(n):
@@ -335,6 +350,11 @@ class WorkingMemoryManipulationSkill:
     def __init__(self, alphabet: Optional[List[str]] = None, seq_len: int = 4):
         self.alphabet = alphabet or list("0123456789")
         self.seq_len = seq_len
+
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        # NOTE: True output is an entire reversed SEQ (multi-token, combinatorial), so it is not always
+        # possible to infer an exhaustive label-token set. We approximate with the single-token alphabet.
+        return [" " + s for s in self.alphabet]
 
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -387,6 +407,9 @@ class QuantitativeReasoningSkill:
         self.max_n = max_n
         self.label_pool = label_pool or ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
         self.allow_equal = allow_equal
+
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        return [" " + s for s in self.label_pool]
 
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -445,6 +468,9 @@ class CognitiveControlInhibitionSkill:
     ):
         self.symbols = symbols or ["A", "B", "C", "D", "E", "F"]
         self.force_derangement = force_derangement
+
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        return [" " + s for s in self.symbols]
 
     def _mapping(self, rng: random.Random, force_derangement: bool) -> Dict[str, str]:
         syms = self.symbols
@@ -518,6 +544,10 @@ class SymbolRecognitionSkill:
         self.alph_size = alph_size
         self.query_pool_size = query_pool_size
 
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        # Prompt explicitly asks YES/NO.
+        return [" YES", " NO"]
+
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for _ in range(n):
@@ -565,6 +595,10 @@ class VocabularySkill:
         self.words = words or ["dax", "wug", "blicket", "toma"]
         self.meanings = meanings or ["RED", "BLUE", "GREEN", "YELLOW"]
         self.n_options = n_options
+
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        # Prompt uses A/B/C/D options up to n_options.
+        return [" A", " B", " C", " D"][: self.n_options]
 
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         if len(self.words) != len(self.meanings):
@@ -627,6 +661,10 @@ class PhonologicalAwarenessSkill:
         self.syllables = syllables or ["mep", "lep", "dap", "mog", "teg", "pag", "nup", "siv", "rav"]
         self.n_options = n_options
 
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        # Prompt uses A/B/C/D options up to n_options.
+        return [" A", " B", " C", " D"][: self.n_options]
+
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for _ in range(n):
@@ -686,6 +724,9 @@ class InstructionComprehensionSkill:
         self.symbols = symbols or ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
         self.set_size = set_size
 
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        return [" YES", " NO"]
+
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for _ in range(n):
@@ -734,6 +775,10 @@ class FineMotorProxySkill:
         self.steps = steps
         self.moves = moves or ["U", "D", "L", "R"]
 
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        # Closed label space: one of the move tokens (predictable, single-token in most tokenizers).
+        return [" " + s for s in self.moves]
+
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for _ in range(n):
@@ -747,8 +792,14 @@ class FineMotorProxySkill:
                 elif m == "R": x += 1
                 elif m == "L": x -= 1
 
-            gold = f"({x},{y})"
-            prompt = f"MOVE: {' '.join(seq)}\nQ: end=(x,y)=\nA:"
+            # Predictable labels: classify the final endpoint's quadrant (tie-breaks: axis -> primary direction).
+            if abs(x) >= abs(y):
+                gold = "R" if x > 0 else ("L" if x < 0 else ("U" if y > 0 else "D"))
+            else:
+                gold = "U" if y > 0 else ("D" if y < 0 else ("R" if x > 0 else "L"))
+
+            # Keep prompt structure; question now asks for a directional class token.
+            prompt = f"MOVE: {' '.join(seq)}\nQ: end_dir=({','.join(self.moves)})=\nA:"
             meta = {"moves": seq, "end": (x, y), "note": "proxy only (not motor precision)"}
             out.append(_fmt_item(self.name, prompt, gold, meta))
         return out
@@ -796,6 +847,11 @@ class MetacognitiveSelfEstimationSkill:
     ):
         self.totals = list_of_skills
 
+    def get_label_tokens(self, prompt: str) -> List[str]:
+        # Prompt asks: "How many were correct?" over one sampled item per skill, so the answer is an int
+        # in [0, n_total]. We default to n_total == len(self.totals) (as constructed in generate()).
+        return [" " + str(i) for i in range(len(self.totals) + 1)]
+
     def sample_one_per_skill_and_concat(
         self,
         items: List[Dict[str, Any]],
@@ -820,7 +876,7 @@ class MetacognitiveSelfEstimationSkill:
         n_total = len(selected)
 
         return concat_prompt, n_correct, n_total
-    
+
     def generate(self, n: int, rng: random.Random) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
 
@@ -898,7 +954,7 @@ class MetacognitiveSelfEstimationSkill:
 
         for _ in range(n):
             concat_prompt, n_correct, n_total = self.sample_one_per_skill_and_concat(items, rng)
-            
+
             prompt = concat_prompt + "\n\n---\n\n\nQ: How many were correct?\nA:"
             gold = f" {n_correct}"
             meta = {"n_total": n_total}
@@ -1002,13 +1058,13 @@ class Shortcut:
 
 SKILL_TO_SHORTCUTS: Dict[str, List[str]] = {
     "relational_reasoning": [
-        Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER 
+        Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
     "rule_induction": [
-        Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER 
+        Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
     "working_memory_maintenance": [
-        Shortcut.FORMAT_KEYWORD_TRIGGER, Shortcut.COPY_BIAS, Shortcut.TRAILING_SEQ_DISTRACTOR 
+        Shortcut.FORMAT_KEYWORD_TRIGGER, Shortcut.COPY_BIAS, Shortcut.TRAILING_SEQ_DISTRACTOR
     ],
     "working_memory_manipulation": [
         Shortcut.RECENCY_BIAS, Shortcut.FORMAT_KEYWORD_TRIGGER
@@ -1020,13 +1076,13 @@ SKILL_TO_SHORTCUTS: Dict[str, List[str]] = {
         Shortcut.LAST_TOKEN_HEURISTIC, Shortcut.FORMAT_KEYWORD_TRIGGER, Shortcut.COPY_BIAS
     ],
     "symbol_recognition": [
-        Shortcut.FORMAT_KEYWORD_TRIGGER 
+        Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
     "vocabulary": [
-        Shortcut.COPY_BIAS, Shortcut.LENGTH_HEURISTIC 
+        Shortcut.COPY_BIAS, Shortcut.LENGTH_HEURISTIC
     ],
     "phonological_awareness": [
-        Shortcut.FORMAT_KEYWORD_TRIGGER 
+        Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
     "instruction_comprehension": [
         Shortcut.FORMAT_KEYWORD_TRIGGER
@@ -1035,7 +1091,7 @@ SKILL_TO_SHORTCUTS: Dict[str, List[str]] = {
         Shortcut.RECENCY_BIAS, Shortcut.FORMAT_KEYWORD_TRIGGER
     ],
     "metacognitive_self_estimation": [
-        Shortcut.COPY_BIAS 
+        Shortcut.COPY_BIAS
     ],
 }
 
@@ -1154,7 +1210,7 @@ class CounterfactualTransformer:
 
             # vocabulary (MC)
             ("vocabulary", Shortcut.COPY_BIAS): self._mc_add_conflicting_hint,
-            ("vocabulary", Shortcut.LENGTH_HEURISTIC): self._mc_add_irrelevant_dict_entry,   
+            ("vocabulary", Shortcut.LENGTH_HEURISTIC): self._mc_add_irrelevant_dict_entry,
 
             # phonological (MC)
             ("phonological_awareness", Shortcut.FORMAT_KEYWORD_TRIGGER): self._phon_rename_rhyme_token,
@@ -1333,20 +1389,20 @@ class CounterfactualTransformer:
         """
         prompt = it["prompt"]
         gold = _gold(it)
-        
+
         # Parse the sequence to find wrong elements
         m = re.search(r"^SEQ:\s*(.+)$", prompt, flags=re.M)
         if not m:
             return it
-        
+
         seq = m.group(1).split()
         # Pick a wrong element (different from gold)
         wrong_elements = [e for e in seq if e != gold]
         if not wrong_elements:
             return it
-        
+
         wrong_hint = rng.choice(wrong_elements)
-        
+
         # Insert HINT: <wrong_element> before the Q: line
         it["prompt"] = re.sub(r"\nQ:", f"\nHINT: {wrong_hint}\nQ:", prompt)
         it["meta"]["cf_edit"] = "added_conflicting_hint_wrong_element"
@@ -1360,11 +1416,11 @@ class CounterfactualTransformer:
         """
         prompt = it["prompt"]
         gold = _gold(it)
-        
+
         # Pick a distractor that is NOT the gold
         distractors = ["X", "Y", "Z", "W"]
         distractor = next((d for d in distractors if d != gold), "X")
-        
+
         # Insert NOTE: <distractor> after the SEQ line
         it["prompt"] = re.sub(r"^(SEQ:\s*.+)$", f"\\1\nNOTE: {distractor}", prompt, flags=re.M)
         it["meta"]["cf_edit"] = "added_trailing_noise_token"
@@ -1563,7 +1619,7 @@ class CounterfactualTransformer:
         _set_gold(it, new_gold)
         it["meta"]["cf_edit"] = "renamed_option_letters_updated_gold"
         return it
-    
+
     def _mc_add_conflicting_hint(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
         """
         Adds a HINT line showing a WRONG meaning to test copy-bias inhibition.
@@ -1578,23 +1634,23 @@ class CounterfactualTransformer:
         """
         prompt = it["prompt"]
         gold = _gold(it)  # e.g., "D" for the correct option letter
-        
+
         # Parse the options to find wrong meanings
         try:
             letters, mapping = self._parse_mc_options(prompt)
         except ValueError:
             return it
-        
+
         if gold not in mapping:
             return it
-        
+
         # Pick a wrong letter (different from the correct one)
         wrong_letters = [L for L in letters if L != gold]
         if not wrong_letters:
             return it
-        
+
         wrong_hint = rng.choice(wrong_letters)
-        
+
         # Insert HINT: <wrong_letter> before the Q: line
         it["prompt"] = prompt.replace("Q: meaning(WORD)=", f"HINT: {wrong_hint}\nQ: meaning(WORD)=")
         it["meta"]["cf_edit"] = "added_conflicting_hint_wrong_letter"
@@ -1608,28 +1664,28 @@ class CounterfactualTransformer:
         This increases prompt length without changing the answer.
         """
         prompt = it["prompt"]
-        
+
         # Parse existing DICT entries
         m = re.search(r"^DICT:\s*(.+)$", prompt, flags=re.M)
         if not m:
             return it
-        
+
         dict_str = m.group(1)
         # Extract existing words to avoid collision
         existing_words = re.findall(r"(\w+)=", dict_str)
         existing_meanings = re.findall(r"=(\w+)", dict_str)
-        
+
         # Generate novel nonsense words that don't collide
         novel_words = ["zorp", "flink", "glorp", "snib", "plonk", "quib"]
         novel_meanings = ["PURPLE", "ORANGE", "PINK", "CYAN", "GRAY", "WHITE"]
-        
+
         # Pick one that doesn't exist
         new_word = next((w for w in novel_words if w not in existing_words), None)
         new_meaning = next((m for m in novel_meanings if m not in existing_meanings), None)
-        
+
         if not new_word or not new_meaning:
             return it
-        
+
         # Add the new entry to the DICT line
         new_dict_str = f"{dict_str}, {new_word}={new_meaning}"
         it["prompt"] = prompt.replace(f"DICT: {dict_str}", f"DICT: {new_dict_str}")
@@ -1737,7 +1793,7 @@ class CounterfactualTransformer:
         it["prompt"] = it["prompt"].replace("deviation_d", "delta_d")
         it["meta"]["cf_edit"] = "renamed_deviation_token"
         return it
-    
+
     def _meta_add_noisy_illustration(self, it: Dict[str, Any], rng: random.Random) -> Dict[str, Any]:
         """
         Disputes anchoring / boundary discipline:
@@ -1847,3 +1903,4 @@ if __name__ == "__main__":
 
     # Generate the dataset with the specified seed (if output path is specified, we save the dataset)
     generate_dataset(n_samples_per_skill = 2500, output_path = "data/skillbench_2500.json", seed=42)
+

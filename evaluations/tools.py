@@ -67,31 +67,34 @@ def parse_batch_size(s: str):
 class _Agg:
     nll: float = 0.0
     n_tokens: int = 0
-    topk: Dict[str, Tuple[int, int]] = None
     # For paired matching metric
     paired_matches: int = 0
     paired_total: int = 0
+    # Label-probability metrics (mean over examples)
+    label_ratio_sum: float = 0.0
+    label_ratio_n: int = 0
+    label_allprob_sum: float = 0.0
+    label_allprob_n: int = 0
 
-    def __post_init__(self):
-        if self.topk is None:
-            self.topk = {}
+def agg_new() -> _Agg:
+    return _Agg(nll=0.0, n_tokens=0,
+                paired_matches=0, paired_total=0,
+                label_ratio_sum=0.0, label_ratio_n=0,
+                label_allprob_sum=0.0, label_allprob_n=0)
 
-def agg_new(topk_list: List[int]) -> _Agg:
-    return _Agg(nll=0.0, n_tokens=0, topk={str(k): (0, 0) for k in topk_list},
-                paired_matches=0, paired_total=0)
-
-def agg_add(agg: _Agg, out: Dict[str, Any], topk_list: List[int]) -> None:
+def agg_add(agg: _Agg, out: Dict[str, Any]) -> None:
     agg.nll += float(out.get("nll", 0.0))
     agg.n_tokens += int(out.get("n_tokens", 0))
 
-    topk_hits = out.get("topk_hits", {}) or {}
-    topk_total = out.get("topk_total", {}) or {}
+    v = out.get("label_choice_vs_other_labels_ratio", None)
+    if v is not None:
+        agg.label_ratio_sum += float(v)
+        agg.label_ratio_n += 1
 
-    for k in topk_list:
-        h = int(topk_hits.get(str(k), 0))
-        t = int(topk_total.get(str(k), 0))
-        hh, tt = agg.topk.get(str(k), (0, 0))
-        agg.topk[str(k)] = (hh + h, tt + t)
+    v = out.get("label_choice_vs_all_prob", None)
+    if v is not None:
+        agg.label_allprob_sum += float(v)
+        agg.label_allprob_n += 1
 
 def agg_add_paired_match(agg: _Agg, base_correct: bool, cf_correct: bool) -> None:
     """Track when both base and cf predictions are correct (matched pair)."""
@@ -99,13 +102,16 @@ def agg_add_paired_match(agg: _Agg, base_correct: bool, cf_correct: bool) -> Non
     if base_correct and cf_correct:
         agg.paired_matches += 1
 
-def agg_finalize(agg: _Agg, prefix: str, topk_list: List[int]) -> Dict[str, float]:
+def agg_finalize(agg: _Agg, prefix: str) -> Dict[str, float]:
     tok = max(agg.n_tokens, 1)
     out: Dict[str, float] = {f"{prefix}_ppl": float(math.exp(agg.nll / tok)),
                              f"{prefix}_n_tokens": float(agg.n_tokens)}
-    for k in topk_list:
-        h, t = agg.topk.get(str(k), (0, 0))
-        out[f"{prefix}_top{k}_acc"] = float(h / max(t, 1))
+
+    if agg.label_ratio_n > 0:
+        out[f"{prefix}_label_choice_vs_other_labels_ratio_mean"] = float(agg.label_ratio_sum / agg.label_ratio_n)
+    if agg.label_allprob_n > 0:
+        out[f"{prefix}_label_choice_vs_all_prob_mean"] = float(agg.label_allprob_sum / agg.label_allprob_n)
+
     # Add paired match rate if tracked
     if agg.paired_total > 0:
         out[f"{prefix}_paired_match_rate"] = float(agg.paired_matches / agg.paired_total)

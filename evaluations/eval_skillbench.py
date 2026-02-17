@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from pathlib import Path
 from tqdm import tqdm
 
-from evaluations.skillbench import generate_dataset, SKILL_BASE_ACCURACY
+from evaluations.skillbench import generate_dataset, SKILL_BASE_ACCURACY, BenchmarkBuilder, BenchmarkSpec
 from evaluations.scoring import score_one
 from evaluations.tools import get_processed_steps, get_target_branches, configure_logging, agg_add, agg_new, agg_finalize, agg_add_paired_match
 
@@ -48,16 +48,16 @@ def _build_fewshot_prompt(test_prompt: str, test_gold: str, fewshot_examples: li
     return fewshot_str + test_prompt
 
 
-def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed, step_num, model_id, samples_csv, topk_list):
+def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed, step_num, model_id, samples_csv, skill_map):
     device = next(model.parameters()).device
 
-    base_agg, cf_agg = agg_new(topk_list), agg_new(topk_list)
-    paired_agg = agg_new(topk_list)  # For tracking paired matches
+    base_agg, cf_agg = agg_new(), agg_new()
+    paired_agg = agg_new()  # For tracking paired matches
     base_ex = cf_ex = 0
 
     skills = defaultdict(lambda: {
-        "base": agg_new(topk_list), "cf": agg_new(topk_list),
-        "paired": agg_new(topk_list),  # For per-skill paired tracking
+        "base": agg_new(), "cf": agg_new(),
+        "paired": agg_new(),  # For per-skill paired tracking
         "base_ex": 0, "cf_ex": 0
     })
 
@@ -68,14 +68,18 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
 
         def write(kind, skill, prompt, gold):
             nonlocal writer
-            out = score_one(model, tokenizer, prompt, gold, topk_list, device)
+            sk = skill_map.get(skill)
+            assert sk is not None, f"Unknown skill '{skill}' (missing from skill_map)"
+            labels = sk.get_label_tokens(prompt)
+            assert isinstance(labels, (list, tuple)) and labels, f"Empty label_tokens for skill '{skill}'"
+            assert all(isinstance(t, str) and len(t.strip()) >= 1 for t in labels), f"Invalid label_tokens for skill '{skill}'"
+            out = score_one(model, tokenizer, prompt, gold, device, labels)
             if writer is None:
                 fields = ["model_id", "step", "branch", "skill", "kind", "prompt", *out.keys()]
                 writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
                 if not file_exists:
                     writer.writeheader()
-            row = {"model_id": model_id, "step": step_num, "branch": model_id, "skill": skill, "kind": kind,
-                   "prompt": prompt, **out}
+            row = {"model_id": model_id, "step": step_num, "branch": model_id, "skill": skill, "kind": kind, "prompt": prompt, **out}
             writer.writerow(row)
             return out
 
@@ -83,12 +87,12 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
             nonlocal base_ex, cf_ex
             out = write(kind, skill, prompt, gold)
             if kind == "base":
-                agg_add(base_agg, out, topk_list); base_ex += 1
-                agg_add(skills[skill]["base"], out, topk_list); skills[skill]["base_ex"] += 1
+                agg_add(base_agg, out); base_ex += 1
+                agg_add(skills[skill]["base"], out); skills[skill]["base_ex"] += 1
                 skills[skill]["base_accuracy"] = base.get("meta", {}).get("base_accuracy", SKILL_BASE_ACCURACY.get(skill, 0.0))
             else:
-                agg_add(cf_agg, out, topk_list); cf_ex += 1
-                agg_add(skills[skill]["cf"], out, topk_list); skills[skill]["cf_ex"] += 1
+                agg_add(cf_agg, out); cf_ex += 1
+                agg_add(skills[skill]["cf"], out); skills[skill]["cf_ex"] += 1
                 skills[skill]["base_accuracy"] = cf.get("meta", {}).get("base_accuracy", skills[skill].get("base_accuracy", SKILL_BASE_ACCURACY.get(skill, 0.0)))
             return out
 
@@ -123,8 +127,8 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
 
     metrics = {"step": step_num, "branch": model_id, "n_samples": len(pairs),
                "base_n_examples": base_ex, "cf_n_examples": cf_ex}
-    metrics.update(agg_finalize(base_agg, "base", topk_list))
-    metrics.update(agg_finalize(cf_agg, "cf", topk_list))
+    metrics.update(agg_finalize(base_agg, "base"))
+    metrics.update(agg_finalize(cf_agg, "cf"))
 
     # Add paired match metrics
     assert paired_agg.paired_total == len(pairs) == cf_ex, "Not all cf samples were paired with base samples"
@@ -136,31 +140,12 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
         metrics[f"skill.{skill}.base_n_examples"] = float(s["base_ex"])
         metrics[f"skill.{skill}.cf_n_examples"] = float(s["cf_ex"])
 
-        bm = agg_finalize(s["base"], f"skill.{skill}.base", topk_list)
-        cm = agg_finalize(s["cf"], f"skill.{skill}.cf", topk_list)
+        bm = agg_finalize(s["base"], f"skill.{skill}.base")
+        cm = agg_finalize(s["cf"], f"skill.{skill}.cf")
+        pm = agg_finalize(s["paired"], f"skill.{skill}")  # adds skill.{skill}.paired_match_rate/matches/total
         metrics.update(bm)
         metrics.update(cm)
-
-        # Compute adjusted accuracies (subtract base/chance level)
-        base_chance = s.get("base_accuracy", SKILL_BASE_ACCURACY.get(skill, 0.0))
-        for k in topk_list:
-            base_acc_key = f"skill.{skill}.base_top{k}_acc"
-            cf_acc_key = f"skill.{skill}.cf_top{k}_acc"
-            metrics[f"skill.{skill}.base_top{k}_acc_adjusted"] = metrics[base_acc_key] - base_chance
-            metrics[f"skill.{skill}.cf_top{k}_acc_adjusted"] = metrics[cf_acc_key] - base_chance
-
-        metrics[f"skill.{skill}.base_chance"] = base_chance
-
-        metrics[f"skill.{skill}.ppl_gap"] = (
-            metrics.get(f"skill.{skill}.cf_ppl", 0.0) - metrics.get(f"skill.{skill}.base_ppl", 0.0)
-            if s["cf_ex"] else 0.0
-        )
-        
-        # Add per-skill paired match metrics
-        if s["paired"].paired_total > 0:
-            metrics[f"skill.{skill}.paired_match_rate"] = float(s["paired"].paired_matches / s["paired"].paired_total)
-            metrics[f"skill.{skill}.paired_matches"] = float(s["paired"].paired_matches)
-            metrics[f"skill.{skill}.paired_total"] = float(s["paired"].paired_total)
+        metrics.update(pm)
 
     return metrics
 
@@ -210,7 +195,6 @@ def _split_fewshot_pool(data: list, n_fewshot: int, seed: int) -> tuple:
 
 def eval_skillbench(repo_id: str,
                     output_dir: str,
-                    topk: str,
                     n_samples_per_skill: int,
                     n_fewshot: int,
                     seed: int,
@@ -226,8 +210,6 @@ def eval_skillbench(repo_id: str,
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    topk_list = sorted({int(x) for x in topk.split(",") if x.strip()}) if topk else []
-
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     fewshot_suffix = f"_fewshot{n_fewshot}" if n_fewshot > 0 else ""
@@ -240,6 +222,8 @@ def eval_skillbench(repo_id: str,
     branches = get_target_branches(repo_id, step_interval, only_final_model_eval)
     completed = get_processed_steps(metrics_csv)
     data = generate_dataset(n_samples_per_skill, seed=seed, shuffle=shuffle)
+    builder = BenchmarkBuilder(BenchmarkSpec(seed=seed, n_per_skill={}, shuffle=False))
+    skill_map = {s.name: s for s in builder.skills}
 
     # Split into few-shot pool and test data
     fewshot_pool, test_data = _split_fewshot_pool(data, n_fewshot, seed)
@@ -250,20 +234,19 @@ def eval_skillbench(repo_id: str,
     fields = [
         "step", "branch",
         "base_ppl", "base_n_tokens", "base_n_examples",
+        "base_label_choice_vs_other_labels_ratio_mean", "base_label_choice_vs_all_prob_mean",
         "cf_ppl", "cf_n_tokens", "cf_n_examples",
+        "cf_label_choice_vs_other_labels_ratio_mean", "cf_label_choice_vs_all_prob_mean",
         "n_samples",
         "paired_match_rate", "paired_matches", "paired_total",
     ]
-    for k in topk_list:
-        fields += [f"base_top{k}_acc", f"cf_top{k}_acc"]
     for s in all_skills:
         fields += [
             f"skill.{s}.base_ppl", f"skill.{s}.base_n_tokens", f"skill.{s}.base_n_examples",
+            f"skill.{s}.base_label_choice_vs_other_labels_ratio_mean", f"skill.{s}.base_label_choice_vs_all_prob_mean",
             f"skill.{s}.cf_ppl", f"skill.{s}.cf_n_tokens", f"skill.{s}.cf_n_examples",
+            f"skill.{s}.cf_label_choice_vs_other_labels_ratio_mean", f"skill.{s}.cf_label_choice_vs_all_prob_mean",
         ]
-        for k in topk_list:
-            fields += [f"skill.{s}.base_top{k}_acc", f"skill.{s}.cf_top{k}_acc",
-                       f"skill.{s}.base_top{k}_acc_adjusted", f"skill.{s}.cf_top{k}_acc_adjusted"]
         fields.append(f"skill.{s}.gap")
         fields += [f"skill.{s}.paired_match_rate", f"skill.{s}.paired_matches", f"skill.{s}.paired_total"]
 
@@ -296,7 +279,7 @@ def eval_skillbench(repo_id: str,
             ).eval()
             logger.info("Model loaded successfully!")
 
-            m = _evaluate_checkpoint(model, tok, test_data, fewshot_pool, n_fewshot, seed, b["step"], b["name"], samples_csv, topk_list)
+            m = _evaluate_checkpoint(model, tok, test_data, fewshot_pool, n_fewshot, seed, b["step"], b["name"], samples_csv, skill_map)
 
             logger.info("Saving output")
             write_header = not os.path.exists(metrics_csv)
@@ -331,7 +314,6 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--n_samples_per_skill", type=int, default=2500, help="Number of samples to draw per skill (note, duplicates will be discarded so returned samples per skill will be less than specified value)")
     parser.add_argument("--n_fewshot", type=int, default=0, help="Number of few-shot examples to prepend (0 = zero-shot)")
     parser.add_argument("-s", "--seed", type=int, default=42, help="Seed used for random number generation")
-    parser.add_argument("--topk", type=str, default="1,3,5,10,20", help="Comma-separated top-k list for accuracy (e.g., '1,5,10')")
     parser.add_argument("--step_interval", type=int, default=10000, help="Number of training steps between evaluated checkpoints")
     parser.add_argument("--only_final_model_eval", action="store_true", help="If set, only the final model will be evaluated.")
     parser.add_argument("--shuffle", action="store_true", help="If set, data will be shuffled on generation")
@@ -343,7 +325,6 @@ if __name__ == "__main__":
 
     eval_skillbench(repo_id=args.repo_id,
                     output_dir=args.output_dir,
-                    topk=args.topk,
                     n_samples_per_skill=args.n_samples_per_skill,
                     n_fewshot=args.n_fewshot,
                     seed=args.seed,
