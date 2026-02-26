@@ -76,7 +76,11 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
             labels = sk.get_label_tokens(prompt)
             assert isinstance(labels, (list, tuple)) and labels, f"Empty label_tokens for skill '{skill}'"
             assert all(isinstance(t, str) and len(t.strip()) >= 1 for t in labels), f"Invalid label_tokens for skill '{skill}'"
-            out = score_one(model, tokenizer, prompt, gold, device, labels)
+            try:
+                out = score_one(model, tokenizer, prompt, gold, device, labels)
+            except AssertionError:
+                logger.error("Assertion error on skill '%s' with prompt '%s' and gold '%s'.", (skill, prompt, gold))
+                raise
             if writer is None:
                 fields = ["model_id", "step", "branch", "skill", "kind", "prompt", *out.keys()]
                 writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
