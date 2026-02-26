@@ -20,6 +20,9 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
+FEWSHOT_SEP = "\n\n"
+
+
 def _build_fewshot_prompt(test_prompt: str, test_gold: str, fewshot_examples: list, skill: str, seed: int) -> str:
     """Construct a few-shot prompt by prepending examples of the same skill."""
     # Filter examples by skill if possible
@@ -42,7 +45,7 @@ def _build_fewshot_prompt(test_prompt: str, test_gold: str, fewshot_examples: li
         ex_gold = ex.get("gold", ex.get("completion", "")).strip()
         # Skip if duplicate or matches test prompt
         if ex_prompt and ex_gold and ex_prompt not in used_prompts and ex_prompt != test_prompt:
-            fewshot_str += f"{ex_prompt}{ex_gold}\n\n"
+            fewshot_str += f"{ex_prompt}{ex_gold}{FEWSHOT_SEP}"
             used_prompts.add(ex_prompt)
 
     return fewshot_str + test_prompt

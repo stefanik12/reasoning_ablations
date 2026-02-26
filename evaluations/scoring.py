@@ -155,7 +155,7 @@ def score_one(
 
         # (a) numerator must be probability mass on the TRUE token *within the label set*,
         # otherwise this ratio can exceed 1 when the true token is not a member of label_ids.
-        assert true_tid in label_id_set, "True token id %d at position %d is not in label_ids %s. " % (true_tid, p, label_ids)
+        assert true_tid in label_id_set, "True token id %d is not in label_ids %s. " % (true_tid, label_ids)
         true_prob_sum += true_prob
 
         # (b) aggregate true-token probability vs all tokens (will be averaged over positions below)

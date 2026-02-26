@@ -132,9 +132,13 @@ class RelationalReasoningSkill:
         self.chain_len = chain_len
 
     def get_label_tokens(self, prompt: str) -> List[str]:
-        if "TRUE/FALSE" in prompt:
+        # fewshot prompt may contain a mixture of samples with different label sets
+        # -> we infer the relevant label set from the test sample
+        from evaluations.eval_skillbench import FEWSHOT_SEP
+        test_prompt = prompt.split(FEWSHOT_SEP)[-1] if FEWSHOT_SEP in prompt else prompt
+        if "TRUE/FALSE" in test_prompt:
             return [" TRUE", " FALSE"]
-        if "YES/NO" in prompt:
+        if "YES/NO" in test_prompt:
             return [" YES", " NO"]
         return [" " + s for s in self.symbols]
 
@@ -167,10 +171,12 @@ class RelationalReasoningSkill:
             if query == "min":
                 # min = smallest element in the ordering
                 gold = involved[-1] if relation_means_greater else involved[0]
+                gold = " " + gold  # Leading space to match get_label_tokens
                 q = f"Q: min({','.join(involved)})="
             elif query == "max":
                 # max = largest element in the ordering
                 gold = involved[0] if relation_means_greater else involved[-1]
+                gold = " " + gold  # Leading space to match get_label_tokens
                 q = f"Q: max({','.join(involved)})="
             elif query == "compare":
                 # Transitive comparison: ask if X rel Y for non-adjacent elements
@@ -188,16 +194,17 @@ class RelationalReasoningSkill:
                 if rng.random() < 0.5:
                     # True case: first rel last (follows from chain by construction)
                     q = f"Q: {first}{relation}{last}=YES/NO?"
-                    gold = "YES"
+                    gold = " YES"
                 else:
                     # False case: last rel first (inverse of the chain)
                     q = f"Q: {last}{relation}{first}=YES/NO?"
-                    gold = "NO"
+                    gold = " NO"
             else:
                 raise ValueError("query must be 'min', 'max', 'compare', or 'random'")
 
             prompt = "\n".join(facts + [q, "A:"])
             meta = {"order": order, "facts": facts, "involved": involved, "query": query}
+            assert gold in self.get_label_tokens(prompt), "Label is out of expected domain"
             out.append(_fmt_item(self.name, prompt, gold, meta))
         return out
 
