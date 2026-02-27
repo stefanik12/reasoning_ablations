@@ -79,7 +79,7 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
             try:
                 out = score_one(model, tokenizer, prompt, gold, device, labels)
             except AssertionError:
-                logger.error("Assertion error on skill '%s' with prompt '%s' and gold '%s'.", (skill, prompt, gold))
+                logger.error("Assertion error on skill '%s' with prompt '%s' and gold '%s'.", skill, prompt, gold)
                 raise
             if writer is None:
                 fields = ["model_id", "step", "branch", "skill", "kind", "prompt", *out.keys()]
@@ -110,7 +110,7 @@ def _evaluate_checkpoint(model, tokenizer, pairs, fewshot_pool, n_fewshot, seed,
             base_out = None
             cf_out = None
 
-            bg = base.get("gold", base.get("completion", "")).strip()
+            bg = base.get("gold", base.get("completion", ""))
             if bg:
                 prompt = base["prompt"]
                 if n_fewshot > 0 and fewshot_pool:

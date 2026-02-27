@@ -966,6 +966,8 @@ class MetacognitiveSelfEstimationSkill:
             gold = f" {n_correct}"
             meta = {"n_total": n_total}
 
+            assert _fmt_item(self.name, prompt, gold, meta)["completion"] in self.get_label_tokens(prompt), \
+                f"Gold answer '{gold}' not in labels for skill '{self.name}'"
             out.append(_fmt_item(self.name, prompt, gold, meta))
 
         return out
@@ -998,15 +1000,15 @@ class BenchmarkBuilder:
         self.skills: List[Skill] = [
             self._make(RelationalReasoningSkill, "relational_reasoning"),
             self._make(RuleInductionSkill, "rule_induction"),
-            # self._make(WorkingMemoryMaintenanceSkill, "working_memory_maintenance"),
-            # self._make(WorkingMemoryManipulationSkill, "working_memory_manipulation"),
-            # self._make(QuantitativeReasoningSkill, "quantitative_reasoning"),
-            # self._make(CognitiveControlInhibitionSkill, "cognitive_control_inhibition"),
-            # self._make(SymbolRecognitionSkill, "symbol_recognition"),
-            # self._make(VocabularySkill, "vocabulary"),
-            # self._make(PhonologicalAwarenessSkill, "phonological_awareness"),
-            # self._make(InstructionComprehensionSkill, "instruction_comprehension"),
-            # self._make(FineMotorProxySkill, "fine_motor_proxy"),
+            self._make(WorkingMemoryMaintenanceSkill, "working_memory_maintenance"),
+            self._make(WorkingMemoryManipulationSkill, "working_memory_manipulation"),
+            self._make(QuantitativeReasoningSkill, "quantitative_reasoning"),
+            self._make(CognitiveControlInhibitionSkill, "cognitive_control_inhibition"),
+            self._make(SymbolRecognitionSkill, "symbol_recognition"),
+            self._make(VocabularySkill, "vocabulary"),
+            self._make(PhonologicalAwarenessSkill, "phonological_awareness"),
+            self._make(InstructionComprehensionSkill, "instruction_comprehension"),
+            self._make(FineMotorProxySkill, "fine_motor_proxy"),
             self._make(MetacognitiveSelfEstimationSkill, "metacognitive_self_estimation"),
         ]
 

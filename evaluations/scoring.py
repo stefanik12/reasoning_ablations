@@ -126,9 +126,8 @@ def score_one(
     label_texts = []
     for t in label_tokens:
         enc = tokenizer(t, add_special_tokens=False)["input_ids"]
-        if enc:
-            label_ids.append(enc[0])
-            label_texts.append(t)
+        label_ids.extend(enc)
+        label_texts.append(t)
 
     assert label_ids, "label_tokens provided but none could be tokenized into at least one token id"
 
@@ -139,8 +138,6 @@ def score_one(
     true_vs_all_prob_sum = 0.0
     sum_label_probs = [0.0 for _ in label_ids]
 
-    label_id_set = set(label_ids)
-
     for p in keep_idx.tolist():
         probs = torch.softmax(shift_logits[0, p], dim=-1)
 
@@ -150,12 +147,16 @@ def score_one(
         label_prob_mass_sum += label_sum
 
         # True token probability at this position (full-vocab softmax)
-        true_tid = int(shift_labels[0, p].item())
-        true_prob = float(probs[true_tid].item())
+        true_tids = shift_labels[0, p:]
+
+        # NOTE: this sum is necessary for multi-token labels, but may result in >1 probabilities
+        # sum instead of mean to make the proportion of this label vs. other labels meaningful
+        true_prob = float(probs[true_tids].sum().item())
 
         # (a) numerator must be probability mass on the TRUE token *within the label set*,
         # otherwise this ratio can exceed 1 when the true token is not a member of label_ids.
-        assert true_tid in label_id_set, "True token id %d is not in label_ids %s. " % (true_tid, label_ids)
+        assert all(true_tid in label_ids for true_tid in true_tids), \
+            "Not all true token id %d present in label_ids %s. " % (true_tids, label_ids)
         true_prob_sum += true_prob
 
         # (b) aggregate true-token probability vs all tokens (will be averaged over positions below)
