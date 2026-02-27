@@ -122,49 +122,55 @@ def score_one(
     assert isinstance(label_tokens, (list, tuple)) and label_tokens, "label_tokens must be a non-empty list/tuple"
     assert all(isinstance(t, str) and len(t.strip()) >= 1 for t in label_tokens), "label_tokens must be non-empty strings"
 
-    label_ids = []
-    label_texts = []
+    # Tokenize each label and track which token IDs belong to which label.
+    # A label may produce >1 token ID (multi-token label).
+    # We build:
+    #   - label_id_groups: list of lists, one per label, containing that label's token IDs
+    #   - all_label_ids: flat set of all label token IDs (for total mass computation)
+    label_id_groups: List[List[int]] = []
+    all_label_ids: set = set()
     for t in label_tokens:
         enc = tokenizer(t, add_special_tokens=False)["input_ids"]
-        label_ids.extend(enc)
-        label_texts.append(t)
+        label_id_groups.append(enc)
+        all_label_ids.update(enc)
 
-    assert label_ids, "label_tokens provided but none could be tokenized into at least one token id"
+    assert all_label_ids, "label_tokens provided but none could be tokenized into at least one token id"
+
+    all_label_ids_list = sorted(all_label_ids)
 
     # Collect per-position quantities on kept (nonmasked) positions only.
-    # Keep_idx indexes into shift space (same space as shift_logits/shift_labels).
+    # For each position we compute:
+    #   - per-label probability = sum of probs of that label's token IDs at this position
+    #   - total label mass = sum of probs of ALL label token IDs at this position
+    #   - true token probability (full-vocab)
     true_prob_sum = 0.0
     label_prob_mass_sum = 0.0
     true_vs_all_prob_sum = 0.0
-    sum_label_probs = [0.0 for _ in label_ids]
+    # Accumulate per-label probabilities across positions (for label_choice summary)
+    sum_label_probs = [0.0] * len(label_tokens)
 
     for p in keep_idx.tolist():
         probs = torch.softmax(shift_logits[0, p], dim=-1)
 
-        # Sum of probability mass on the provided label tokens (denominator mass)
-        lp = [float(probs[i].item()) for i in label_ids]
-        label_sum = float(sum(lp))
-        label_prob_mass_sum += label_sum
+        # Total probability mass on ALL label token IDs at this position
+        label_mass = sum(float(probs[tid].item()) for tid in all_label_ids_list)
+        label_prob_mass_sum += label_mass
 
-        # True token probability at this position (full-vocab softmax)
-        true_tids = shift_labels[0, p:]
+        # Per-label probability at this position (sum of that label's token IDs)
+        for li, group in enumerate(label_id_groups):
+            lp = sum(float(probs[tid].item()) for tid in group)
+            sum_label_probs[li] += lp
 
-        # NOTE: this sum is necessary for multi-token labels, but may result in >1 probabilities
-        # sum instead of mean to make the proportion of this label vs. other labels meaningful
-        true_prob = float(probs[true_tids].sum().item())
+        # True token probability at this position
+        true_tid = int(shift_labels[0, p].item())
+        true_prob = float(probs[true_tid].item())
 
-        # (a) numerator must be probability mass on the TRUE token *within the label set*,
-        # otherwise this ratio can exceed 1 when the true token is not a member of label_ids.
-        assert all(true_tid in label_ids for true_tid in true_tids), \
-            "Not all true token id %d present in label_ids %s. " % (true_tids, label_ids)
-        true_prob_sum += true_prob
+        # (a) Only count true-token mass toward numerator if it's in the label set
+        if true_tid in all_label_ids:
+            true_prob_sum += true_prob
 
-        # (b) aggregate true-token probability vs all tokens (will be averaged over positions below)
+        # (b) True-token probability vs all tokens (full vocab)
         true_vs_all_prob_sum += true_prob
-
-        # For a single summary label_choice, accumulate label probs across positions
-        for j, v in enumerate(lp):
-            sum_label_probs[j] += v
 
     # (a) proportion of label-mass assigned to the TRUE token(s), aggregated over all kept positions
     label_choice_vs_other_labels_ratio = (true_prob_sum / label_prob_mass_sum) if label_prob_mass_sum > 0 else None
@@ -176,7 +182,7 @@ def score_one(
     denom = float(len(keep_idx))
     mean_label_probs = [v / denom for v in sum_label_probs]
     max_i = max(range(len(mean_label_probs)), key=lambda i: mean_label_probs[i])
-    label_choice = label_texts[max_i]
+    label_choice = label_tokens[max_i]
     label_choice_prob = float(mean_label_probs[max_i])
 
     out: Dict[str, Any] = {"nll": nll,
