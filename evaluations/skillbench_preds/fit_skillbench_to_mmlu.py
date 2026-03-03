@@ -120,10 +120,13 @@ def main():
     ap.add_argument("--join_on_branch", action = "store_true")
     ap.add_argument("--feature_kind", choices = ["base", "cf", "gap"], default = "base")
     ap.add_argument("--feature_metric", default = "top1_acc")
+    ap.add_argument("--feats_to_remove", default = "")
     ap.add_argument("--skill_regex", default = None)
     ap.add_argument("--standardize", action = "store_true")
     ap.add_argument("--corr", choices = ["pearson", "spearman", "kendall"], default = "pearson")
     args = ap.parse_args()
+
+    args.feats_to_remove = args.feats_to_remove.split(",") if args.feats_to_remove else []
 
     def metrics(y, yhat):
         return {"n": int(len(y)), "r2": r2(y, yhat), "corr": corr(y, yhat), "mse": mse(y, yhat)}
@@ -159,6 +162,7 @@ def main():
     # Determine a common feature set: intersection across all models.
     cand = select_features(list(all_cols), args.feature_kind, args.feature_metric, args.skill_regex)
     feat_cols = [c for c in cand if all(c in df.columns for df in dfs.values())]
+    feat_cols = [c for c in feat_cols if not any(c_to_rem in c for c_to_rem in args.feats_to_remove)]
     if not feat_cols:
         ex = "skill.<skill>.gap" if args.feature_kind == "gap" else f"skill.<skill>.{args.feature_kind}_{args.feature_metric}"
         raise SystemExit(f"No common features across all models; expected columns like {ex}")
